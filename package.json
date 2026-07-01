@@ -1,0 +1,43 @@
+{
+  "name": "safetensors-viewer",
+  "displayName": "Safetensors Viewer",
+  "description": "Visually inspect .safetensors models — architecture tree, layer-type inference, tensor inventory, shapes/dtypes/params. Header-only, so multi-GB files open instantly.",
+  "version": "0.1.0",
+  "publisher": "open-source",
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Visualization", "Data Science", "Machine Learning", "Other"],
+  "keywords": ["safetensors", "pytorch", "model", "weights", "machine-learning", "netron", "huggingface"],
+  "repository": { "type": "git", "url": "https://github.com/OWNER/safetensors-viewer" },
+  "activationEvents": [],
+  "main": "./extension.js",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "safetensorsViewer.preview",
+        "displayName": "Safetensors Viewer",
+        "selector": [{ "filenamePattern": "*.safetensors" }],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "safetensorsViewer.open",
+        "title": "Open with Safetensors Viewer",
+        "category": "Safetensors"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "safetensorsViewer.open",
+          "when": "resourceExtname == .safetensors",
+          "group": "navigation"
+        }
+      ]
+    }
+  }
+}
