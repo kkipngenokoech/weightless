@@ -9,7 +9,7 @@
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Visualization", "Data Science", "Machine Learning", "Other"],
   "keywords": ["safetensors", "gguf", "pytorch", "model", "weights", "machine-learning", "netron", "huggingface", "llama.cpp", "checkpoint", "lora"],
-  "repository": { "type": "git", "url": "https://github.com/OWNER/weightless" },
+  "repository": { "type": "git", "url": "https://github.com/kkipngenokoech/weightless" },
   "activationEvents": [],
   "main": "./extension.js",
   "scripts": {
