@@ -53,7 +53,36 @@ class SafetensorsEditorProvider {
   }
 }
 
+// Sidebar: lists every model file in the workspace; click to open in the viewer.
+class ModelFilesProvider {
+  constructor() {
+    this._em = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._em.event;
+  }
+  refresh() { this._em.fire(undefined); }
+  getTreeItem(item) { return item; }
+  async getChildren() {
+    const files = await vscode.workspace.findFiles('**/*.{safetensors,gguf}', '**/node_modules/**', 500);
+    return files
+      .sort((a, b) => a.fsPath.localeCompare(b.fsPath))
+      .map((uri) => {
+        const item = new vscode.TreeItem(path.basename(uri.fsPath));
+        item.description = vscode.workspace.asRelativePath(path.dirname(uri.fsPath));
+        item.resourceUri = uri;
+        item.iconPath = new vscode.ThemeIcon('file-binary');
+        item.tooltip = uri.fsPath;
+        item.command = { command: 'vscode.openWith', title: 'Open with Weightless', arguments: [uri, 'safetensorsViewer.preview'] };
+        return item;
+      });
+  }
+}
+
 function activate(context) {
+  const modelFiles = new ModelFilesProvider();
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('weightless.models', modelFiles),
+    vscode.commands.registerCommand('weightless.refreshModels', () => modelFiles.refresh())
+  );
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(
       'safetensorsViewer.preview',

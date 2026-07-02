@@ -62,7 +62,38 @@
       {
         "command": "safetensorsViewer.openFromHub",
         "title": "Open Model from Hugging Face Hub (header only)",
-        "category": "Weightless"
+        "category": "Weightless",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "weightless.refreshModels",
+        "title": "Refresh Model List",
+        "category": "Weightless",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "weightless",
+          "title": "Weightless",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "weightless": [
+        {
+          "id": "weightless.models",
+          "name": "Models",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "weightless.models",
+        "contents": "No .safetensors or .gguf files found in this workspace.\n[Open Model from Hugging Face Hub](command:safetensorsViewer.openFromHub)\nInspect any Hub model by id — header-only, no download."
       }
     ],
     "menus": {
@@ -71,6 +102,18 @@
           "command": "safetensorsViewer.open",
           "when": "resourceExtname == .safetensors || resourceExtname == .gguf",
           "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "safetensorsViewer.openFromHub",
+          "when": "view == weightless.models",
+          "group": "navigation@1"
+        },
+        {
+          "command": "weightless.refreshModels",
+          "when": "view == weightless.models",
+          "group": "navigation@2"
         }
       ]
     }
