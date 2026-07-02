@@ -1,61 +1,89 @@
-# Safetensors Viewer
+# Weightless
 
-A VSCode extension to **visually inspect `.safetensors` models** — architecture tree,
-layer-type inference, and a full tensor inventory — right inside the editor. It reads
-**only the file header**, so a 1.4 GB (or 100 GB sharded) model opens instantly.
+**Inspect models without loading the weights.**
 
-Double-click any `.safetensors` file → it opens in a rich viewer instead of failing as
+A VSCode extension that opens `.safetensors` and `.gguf` checkpoints — including
+multi-GB, multi-shard ones — **instantly**, by reading only the file header. It can even
+inspect models **straight from the Hugging Face Hub** without downloading them: a 500 GB
+sharded model costs a few hundred KB of traffic.
+
+Double-click any `.safetensors` / `.gguf` file → a rich viewer opens instead of
 "binary file not shown."
 
 ## Features
 
-- **Architecture view** — reconstructs the **module hierarchy** from tensor names
-  (`vision_model.encoder.layers.0.self_attn.q_proj` → a real nested tree), collapses
-  **repeated blocks** (`layers.0…31` → `ModuleList ×32`, shown once), and **infers layer
-  types** (Attention / MLP / Norm / Embedding / Conv / Linear) from names + shapes.
-- **Component breakdown** — top-level modules sized by parameter share, with a
-  heuristic *backbone vs. head* tag.
-- **Tensor inventory** — searchable, sortable table of every tensor: name, shape, dtype,
-  params, byte size (+ shard).
-- **Summary** — total params, tensor count, file size, shard count, dtype distribution.
-- **Sharded models** — aggregates `*.safetensors.index.json` weight maps across shards.
-- **Config + metadata tabs** — pretty-prints an adjacent `config.json` and the header's
-  `__metadata__`.
-- **Header-only** — never loads weight bytes, so it's instant on huge files and uses no
-  meaningful memory.
-- Themed with VSCode variables (light/dark aware), no external runtime dependencies.
+### Architecture
+
+- **Flowchart view** — the model as a branch-and-merge diagram: each input branch
+  (vision tower, audio encoder, …) in its own column with its **input type**
+  (`image / pixels`, `token ids · vocab 262144`) derived from the weights, meeting at a
+  **merge junction**, flowing through the trunk, and **splitting out to each head** with
+  its output type (`logits · 262144`, `value (scalar)`). Double-click to drill into any
+  module; repeated blocks collapse to `×N` (click to expand all N).
+- **Tree view** — the classic collapsible module hierarchy.
+- **Code view** — the selected scope as a **reconstructed PyTorch-style definition**
+  (`Linear(in_features=640, out_features=2048, bias=False)`), GitHub-style with line
+  numbers, syntax colors and one-click copy. Gaps in `Sequential` indices are called out
+  as parameter-free modules (activations).
+
+### Understanding
+
+- **Backbone identification** — names the architecture family from `config.json`
+  (`model_type`, `architectures`, sub-configs), module naming, or **structural
+  fingerprints** (`≈ Gemma 3` from its norm scheme + vocab; `≈ SigLIP So400m` from its
+  widths) when nothing else is recorded. Plus exact provenance (`base: google/gemma-3-270m`)
+  when a sidecar file stored it.
+- **Composition** — actual layer counts (Linear / Attention / MLP / Norm / Embedding /
+  Conv) per scope, updating as you click around the graph.
+- **I/O & training footprint** — image input resolution (from patch + position
+  embeddings), context length, vocab, tied/untied lm_head, LoRA rank + targets, weights
+  size at bf16/fp32/int8/int4, full-finetune (AdamW) and LoRA memory rules-of-thumb,
+  KV-cache per 1k tokens (GQA-aware).
+
+### Inventory
+
+- **Tensor table** — searchable, with a **layer column** (`Linear 640→2048`) so
+  `mlp.gate_proj` reads as what it is; shapes, dtypes, params, bytes, shard.
+- **Summary** — params, tensor count, file size, shards, dtype distribution.
+- **Config / Training / Generation / Adapter / Tokenizer / Metadata tabs** — adjacent
+  sidecar JSONs auto-discovered and pretty-printed with syntax highlighting.
+
+### Formats & sources
+
+- **`.safetensors`** — single-file and sharded (`model.safetensors.index.json`).
+- **`.gguf`** — llama.cpp / quantized ecosystem: quant dtypes (`Q4_K`, `Q6_K`, …), exact
+  per-tensor bytes, metadata mapped onto config facts (layers/heads/GQA/context).
+- **Hugging Face Hub** — `Weightless: Open Model from Hugging Face Hub` command; type a
+  model id, get the full viewer via HTTP Range requests (header-only). Supports
+  `HF_TOKEN` for gated repos.
 
 ## How it works (and its one honest limit)
 
-A `.safetensors` file is **just weights** — a header (8-byte length + JSON of every
-tensor's `name`, `shape`, `dtype`, byte-offsets) followed by raw bytes. There is **no
-computational graph** stored in it. This extension parses that header and reconstructs
-everything you *can* get from it:
+These formats store **weights, not code**: a header describing every tensor's name,
+shape, dtype and byte-offsets, followed by raw bytes. Weightless parses only the header
+and derives everything that is *actually derivable*: the module hierarchy (dotted names
+encode it exactly), repeated structure, layer types and feature dims (from weight
+shapes), input modalities (from embeddings), and head output types.
 
-- the **module hierarchy** (parent/child nesting) — the dotted names encode it exactly;
-- **repeated structure** (transformer stacks);
-- **layer types** (inferred from naming/shape conventions).
-
-What it **cannot** show from the file alone is the **true forward-pass graph** (which
-module feeds which — Netron-style edges). That data flow lives in the model's *code*, not
-its weights. See the roadmap for the optional Python-tracing path.
+What no tool can get from weights alone is the **true forward-pass graph** (execution
+order, activations, skip connections) — that lives in the model's code. Where Weightless
+shows inferred wiring, the edges are **dashed** and labeled as such.
 
 ## Roadmap
 
-- **Tier 2 — true data-flow graph (opt-in):** a Python companion that loads the model
-  (`config.json` + the weights + the model class) and traces a forward pass with
-  `torch.fx` / torchview to render real edges. Requires the user's Python env + the model
-  definition; strictly optional.
-- SVG/graph-layout rendering of the module tree (dagre/elk).
-- Diff two checkpoints (shape/param deltas).
-- Per-tensor stats (min/max/mean) via a bounded ranged read of the weight bytes.
+- **Per-tensor stats** — NaN/Inf detection, min/max/mean/std via bounded ranged reads
+  (the "is my checkpoint corrupt?" check), still never loading the full file.
+- **Checkpoint diff** — compare two files: changed/added/removed tensors, param deltas.
+- **Tier 2 — true data-flow graph (opt-in):** a Python companion tracing a forward pass
+  with `torch.fx` to render real edges. Requires the model code; strictly optional.
 
 ## Install / develop
 
 ```bash
-git clone <this repo> && cd safetensors-viewer
-# no build step — plain JS. Press F5 in VSCode to launch an Extension Development Host,
-# then open any .safetensors file.
+git clone <this repo> && cd weightless
+npm test          # header parsers (safetensors + GGUF) — no build step, plain JS
+# Press F5 in VSCode to launch an Extension Development Host, then open any
+# .safetensors / .gguf file, or run "Weightless: Open Model from Hugging Face Hub".
 # to package a .vsix:
 npx @vscode/vsce package
 ```

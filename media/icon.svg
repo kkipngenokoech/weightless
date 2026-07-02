@@ -1,0 +1,62 @@
+<svg width="256" height="256" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b1220"/><stop offset="1" stop-color="#1e293b"/></linearGradient>
+<radialGradient id="gl" cx="0.28" cy="0.2" r="0.9"><stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/><stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="128" height="128" rx="30" fill="url(#bg)"/>
+<rect width="128" height="128" rx="30" fill="url(#gl)"/>
+<g stroke="#22d3ee" stroke-width="1.5" stroke-opacity="0.45">
+<line x1="26.0" y1="24.0" x2="64.0" y2="24.0"/>
+<line x1="26.0" y1="24.0" x2="64.0" y2="44.0"/>
+<line x1="26.0" y1="24.0" x2="64.0" y2="64.0"/>
+<line x1="26.0" y1="24.0" x2="64.0" y2="84.0"/>
+<line x1="26.0" y1="24.0" x2="64.0" y2="104.0"/>
+<line x1="26.0" y1="64.0" x2="64.0" y2="24.0"/>
+<line x1="26.0" y1="64.0" x2="64.0" y2="44.0"/>
+<line x1="26.0" y1="64.0" x2="64.0" y2="64.0"/>
+<line x1="26.0" y1="64.0" x2="64.0" y2="84.0"/>
+<line x1="26.0" y1="64.0" x2="64.0" y2="104.0"/>
+<line x1="26.0" y1="104.0" x2="64.0" y2="24.0"/>
+<line x1="26.0" y1="104.0" x2="64.0" y2="44.0"/>
+<line x1="26.0" y1="104.0" x2="64.0" y2="64.0"/>
+<line x1="26.0" y1="104.0" x2="64.0" y2="84.0"/>
+<line x1="26.0" y1="104.0" x2="64.0" y2="104.0"/>
+<line x1="64.0" y1="24.0" x2="102.0" y2="24.0"/>
+<line x1="64.0" y1="24.0" x2="102.0" y2="64.0"/>
+<line x1="64.0" y1="24.0" x2="102.0" y2="104.0"/>
+<line x1="64.0" y1="44.0" x2="102.0" y2="24.0"/>
+<line x1="64.0" y1="44.0" x2="102.0" y2="64.0"/>
+<line x1="64.0" y1="44.0" x2="102.0" y2="104.0"/>
+<line x1="64.0" y1="64.0" x2="102.0" y2="24.0"/>
+<line x1="64.0" y1="64.0" x2="102.0" y2="64.0"/>
+<line x1="64.0" y1="64.0" x2="102.0" y2="104.0"/>
+<line x1="64.0" y1="84.0" x2="102.0" y2="24.0"/>
+<line x1="64.0" y1="84.0" x2="102.0" y2="64.0"/>
+<line x1="64.0" y1="84.0" x2="102.0" y2="104.0"/>
+<line x1="64.0" y1="104.0" x2="102.0" y2="24.0"/>
+<line x1="64.0" y1="104.0" x2="102.0" y2="64.0"/>
+<line x1="64.0" y1="104.0" x2="102.0" y2="104.0"/>
+</g>
+<circle cx="26.0" cy="24.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="26.0" cy="24.0" r="5" fill="#67e8f9"/>
+<circle cx="26.0" cy="64.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="26.0" cy="64.0" r="5" fill="#67e8f9"/>
+<circle cx="26.0" cy="104.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="26.0" cy="104.0" r="5" fill="#67e8f9"/>
+<circle cx="64.0" cy="24.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="64.0" cy="24.0" r="5" fill="#e0f2fe"/>
+<circle cx="64.0" cy="44.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="64.0" cy="44.0" r="5" fill="#e0f2fe"/>
+<circle cx="64.0" cy="64.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="64.0" cy="64.0" r="5" fill="#e0f2fe"/>
+<circle cx="64.0" cy="84.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="64.0" cy="84.0" r="5" fill="#e0f2fe"/>
+<circle cx="64.0" cy="104.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="64.0" cy="104.0" r="5" fill="#e0f2fe"/>
+<circle cx="102.0" cy="24.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="102.0" cy="24.0" r="5" fill="#67e8f9"/>
+<circle cx="102.0" cy="64.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="102.0" cy="64.0" r="5" fill="#67e8f9"/>
+<circle cx="102.0" cy="104.0" r="9.5" fill="#22d3ee" fill-opacity="0.28"/>
+<circle cx="102.0" cy="104.0" r="5" fill="#67e8f9"/>
+</svg>

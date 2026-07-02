@@ -1,6 +1,8 @@
 const vscode = require('vscode');
 const path = require('path');
 const { loadModel } = require('./lib/safetensors');
+const { loadGGUFModel } = require('./lib/gguf');
+const { loadFromHub } = require('./lib/hub');
 
 function getNonce() {
   let text = '';
@@ -19,13 +21,17 @@ function getHtml(webview, extUri, nonce) {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link href="${styleUri}" rel="stylesheet">
-  <title>Safetensors Viewer</title>
+  <title>Weightless</title>
 </head>
 <body>
   <div id="app"><div class="loading">Reading header…</div></div>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
+}
+
+function loadByExt(fsPath) {
+  return /\.gguf$/i.test(fsPath) ? loadGGUFModel(fsPath) : loadModel(fsPath);
 }
 
 class SafetensorsEditorProvider {
@@ -39,7 +45,7 @@ class SafetensorsEditorProvider {
     };
     webview.html = getHtml(webview, this.context.extensionUri, getNonce());
     try {
-      const model = await loadModel(document.uri.fsPath);
+      const model = await loadByExt(document.uri.fsPath);
       webview.postMessage({ type: 'model', fileName: path.basename(document.uri.fsPath), ...model });
     } catch (err) {
       webview.postMessage({ type: 'error', message: String((err && err.message) || err) });
@@ -59,6 +65,32 @@ function activate(context) {
     vscode.commands.registerCommand('safetensorsViewer.open', (uri) => {
       const target = uri || (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri);
       if (target) vscode.commands.executeCommand('vscode.openWith', target, 'safetensorsViewer.preview');
+    })
+  );
+  // Inspect a model straight from the Hugging Face Hub — header-only Range
+  // requests, so even 100 GB models cost a few hundred KB of traffic.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('safetensorsViewer.openFromHub', async () => {
+      const id = await vscode.window.showInputBox({
+        prompt: 'Hugging Face model id (weights are NOT downloaded — header only)',
+        placeHolder: 'e.g. google/gemma-3-270m or Qwen/Qwen2.5-7B-Instruct',
+        ignoreFocusOut: true,
+      });
+      if (!id) return;
+      const panel = vscode.window.createWebviewPanel(
+        'safetensorsViewer.hub', `HF: ${id.trim()}`, vscode.ViewColumn.Active,
+        { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] }
+      );
+      panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
+      try {
+        const model = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Reading ${id.trim()} headers from the Hub…` },
+          () => loadFromHub(id.trim())
+        );
+        panel.webview.postMessage({ type: 'model', fileName: id.trim(), ...model });
+      } catch (err) {
+        panel.webview.postMessage({ type: 'error', message: String((err && err.message) || err) });
+      }
     })
   );
 }

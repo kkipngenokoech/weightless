@@ -1,40 +1,49 @@
 {
-  "name": "safetensors-viewer",
-  "displayName": "Safetensors Viewer",
-  "description": "Visually inspect .safetensors models — architecture tree, layer-type inference, tensor inventory, shapes/dtypes/params. Header-only, so multi-GB files open instantly.",
+  "name": "weightless",
+  "displayName": "Weightless — Safetensors & GGUF Model Inspector",
+  "description": "Inspect models without loading the weights. Architecture flowcharts, tensor tables, backbone detection, reconstructed PyTorch definitions, memory & finetune estimates — header-only reads open multi-GB .safetensors and .gguf files instantly, even straight from the Hugging Face Hub.",
   "version": "0.1.0",
   "publisher": "open-source",
   "license": "MIT",
+  "icon": "icon.png",
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Visualization", "Data Science", "Machine Learning", "Other"],
-  "keywords": ["safetensors", "pytorch", "model", "weights", "machine-learning", "netron", "huggingface"],
-  "repository": { "type": "git", "url": "https://github.com/OWNER/safetensors-viewer" },
+  "keywords": ["safetensors", "gguf", "pytorch", "model", "weights", "machine-learning", "netron", "huggingface", "llama.cpp", "checkpoint", "lora"],
+  "repository": { "type": "git", "url": "https://github.com/OWNER/weightless" },
   "activationEvents": [],
   "main": "./extension.js",
   "scripts": {
-    "test": "node test/run.js"
+    "test": "node test/run.js && node test/gguf.js"
   },
   "contributes": {
     "customEditors": [
       {
         "viewType": "safetensorsViewer.preview",
         "displayName": "Safetensors Viewer",
-        "selector": [{ "filenamePattern": "*.safetensors" }],
+        "selector": [
+          { "filenamePattern": "*.safetensors" },
+          { "filenamePattern": "*.gguf" }
+        ],
         "priority": "default"
       }
     ],
     "commands": [
       {
         "command": "safetensorsViewer.open",
-        "title": "Open with Safetensors Viewer",
-        "category": "Safetensors"
+        "title": "Open with Weightless",
+        "category": "Weightless"
+      },
+      {
+        "command": "safetensorsViewer.openFromHub",
+        "title": "Open Model from Hugging Face Hub (header only)",
+        "category": "Weightless"
       }
     ],
     "menus": {
       "explorer/context": [
         {
           "command": "safetensorsViewer.open",
-          "when": "resourceExtname == .safetensors",
+          "when": "resourceExtname == .safetensors || resourceExtname == .gguf",
           "group": "navigation"
         }
       ]
