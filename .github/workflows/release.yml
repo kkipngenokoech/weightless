@@ -50,6 +50,8 @@ jobs:
           OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
         run: |
           if [ -n "$OVSX_TOKEN" ]; then
+            # claim the namespace on first publish; harmless if it already exists
+            npx --yes ovsx create-namespace kipngenokoech -p "$OVSX_TOKEN" || true
             npx --yes ovsx publish *.vsix -p "$OVSX_TOKEN"
           else
             echo "::notice::OVSX_TOKEN secret not set — skipped Open VSX publish"
