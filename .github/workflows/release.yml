@@ -1,0 +1,56 @@
+name: release
+
+# Publish flow: bump the version, tag, push the tag —
+#   npm version patch && git push && git push --tags
+# This workflow then: tests → packages → GitHub Release with the .vsix →
+# publishes to VS Code Marketplace (needs VSCE_PAT secret) and Open VSX
+# (needs OVSX_TOKEN secret). Missing secrets are skipped, not failed.
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Test
+        run: npm test
+
+      - name: Package
+        run: npx --yes @vscode/vsce package
+
+      - name: GitHub Release with .vsix
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" *.vsix \
+            --title "Weightless ${{ github.ref_name }}" --generate-notes || \
+          gh release upload "${{ github.ref_name }}" *.vsix --clobber
+
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -n "$VSCE_PAT" ]; then
+            npx --yes @vscode/vsce publish -p "$VSCE_PAT"
+          else
+            echo "::notice::VSCE_PAT secret not set — skipped Marketplace publish (upload the .vsix manually or add the secret)"
+          fi
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+        run: |
+          if [ -n "$OVSX_TOKEN" ]; then
+            npx --yes ovsx publish *.vsix -p "$OVSX_TOKEN"
+          else
+            echo "::notice::OVSX_TOKEN secret not set — skipped Open VSX publish"
+          fi
