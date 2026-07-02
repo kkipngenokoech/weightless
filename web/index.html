@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weightless — inspect models without loading the weights</title>
+<meta name="description" content="Inspect .safetensors and .gguf models instantly in your browser — header-only reads, straight from the Hugging Face Hub or a local file that never leaves your machine.">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<header id="topbar" class="hidden">
+  <img src="icon.png" width="22" height="22" alt="">
+  <span class="brand">Weightless</span>
+  <button id="again" class="gbtn">Inspect another model</button>
+  <span class="topspacer"></span>
+  <a class="toplink" href="https://marketplace.visualstudio.com/items?itemName=kipngenokoech.weightless" target="_blank" rel="noopener">VS Code</a>
+  <a class="toplink" href="https://github.com/kkipngenokoech/weightless" target="_blank" rel="noopener">GitHub</a>
+</header>
+
+<section id="hero">
+  <img class="hero-icon" src="icon.png" width="84" height="84" alt="Weightless">
+  <h1>Weightless</h1>
+  <p class="tag">Inspect models <b>without loading the weights</b>. Header-only reads open multi-GB
+    <code>.safetensors</code> / <code>.gguf</code> checkpoints instantly — a 500&nbsp;GB Hub model
+    costs a few hundred KB.</p>
+
+  <div class="hub-row">
+    <input id="hubid" type="text" spellcheck="false" autocomplete="off"
+      placeholder="Hugging Face model id — e.g. openai-community/gpt2, or paste a huggingface.co URL">
+    <button id="go" class="cta">Inspect</button>
+  </div>
+
+  <div id="drop">or drag &amp; drop a <b>.safetensors</b> / <b>.gguf</b> file here (drop its
+    <code>config.json</code> alongside for extra detail) — files never leave your machine;
+    only the header is read</div>
+
+  <p id="hero-err" class="hidden"></p>
+
+  <div class="try">Try:
+    <a href="?model=openai-community/gpt2">gpt2</a> ·
+    <a href="?model=Qwen/Qwen2.5-0.5B">Qwen2.5-0.5B</a> ·
+    <a href="?model=baidu/Unlimited-OCR">Unlimited-OCR</a>
+  </div>
+
+  <p class="links">
+    <a href="https://marketplace.visualstudio.com/items?itemName=kipngenokoech.weightless" target="_blank" rel="noopener">VS Code extension</a> ·
+    <a href="https://open-vsx.org/extension/kipngenokoech/weightless" target="_blank" rel="noopener">Open VSX</a> ·
+    <a href="https://github.com/kkipngenokoech/weightless" target="_blank" rel="noopener">GitHub</a>
+  </p>
+</section>
+
+<div id="app"></div>
+<script src="main.js"></script>
+<script src="parsers.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

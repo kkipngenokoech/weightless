@@ -2,6 +2,8 @@
 
 **Inspect models without loading the weights.**
 
+**[Try it in your browser →](https://kkipngenokoech.github.io/weightless/)** — no install; paste a Hub id or drop a local file. Or get the [VS Code extension](https://marketplace.visualstudio.com/items?itemName=kipngenokoech.weightless).
+
 ![Weightless inspecting a VLA critic: branch-and-merge architecture flowchart with input/output types, backbone identification, and training footprint — all from a header-only read](docs/screenshot.png)
 
 A VSCode extension that opens `.safetensors` and `.gguf` checkpoints — including
