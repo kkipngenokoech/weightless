@@ -37,3 +37,36 @@ jobs:
           path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
+      - name: Mirror to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::notice::HF_TOKEN secret not set — skipped Hugging Face Space deploy"
+            exit 0
+          fi
+          pip install -q huggingface_hub
+          cat > _site/README.md <<'MD'
+          ---
+          title: Weightless
+          emoji: 🪶
+          colorFrom: blue
+          colorTo: indigo
+          sdk: static
+          pinned: false
+          license: mit
+          short_description: Inspect models without loading the weights
+          ---
+          # Weightless
+          Inspect `.safetensors` / `.gguf` models without loading the weights — header-only reads,
+          straight from the Hub or a local file. Source: https://github.com/kkipngenokoech/weightless
+          MD
+          python -c "
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ['HF_TOKEN'])
+          api.create_repo('kkipngenokoech/weightless', repo_type='space', space_sdk='static', exist_ok=True)
+          api.upload_folder(folder_path='_site', repo_id='kkipngenokoech/weightless', repo_type='space',
+                            commit_message='sync from GitHub ' + os.environ.get('GITHUB_SHA', '')[:7])
+          print('Space updated: https://huggingface.co/spaces/kkipngenokoech/weightless')
+          "
