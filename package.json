@@ -3,7 +3,7 @@
   "displayName": "Weightless — Safetensors & GGUF Model Inspector",
   "description": "Inspect models without loading the weights. Architecture flowcharts, tensor tables, backbone detection, reconstructed PyTorch definitions, memory & finetune estimates — header-only reads open multi-GB .safetensors and .gguf files instantly, even straight from the Hugging Face Hub.",
   "version": "0.1.0",
-  "publisher": "open-source",
+  "publisher": "kipngenokoech",
   "license": "MIT",
   "icon": "icon.png",
   "engines": { "vscode": "^1.75.0" },
