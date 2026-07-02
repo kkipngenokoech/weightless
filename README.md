@@ -2,7 +2,7 @@
 
 **Inspect models without loading the weights.**
 
-**[Try it in your browser →](https://kkipngenokoech.github.io/weightless/)** — no install; paste a Hub id or drop a local file. Or get the [VS Code extension](https://marketplace.visualstudio.com/items?itemName=kipngenokoech.weightless).
+**[Try it in your browser →](https://kkipngenokoech.github.io/weightless/)** — no install; paste a Hub id or drop a local file. Also live as a [🤗 Hugging Face Space](https://huggingface.co/spaces/kkipngenokoech/weightless). Or get the extension: [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kipngenokoech.weightless) · [Open VSX](https://open-vsx.org/extension/kipngenokoech/weightless).
 
 ![Weightless inspecting a VLA critic: branch-and-merge architecture flowchart with input/output types, backbone identification, and training footprint — all from a header-only read](docs/screenshot.png)
 
