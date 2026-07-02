@@ -2,6 +2,8 @@
 
 **Inspect models without loading the weights.**
 
+![Weightless inspecting a VLA critic: branch-and-merge architecture flowchart with input/output types, backbone identification, and training footprint — all from a header-only read](docs/screenshot.png)
+
 A VSCode extension that opens `.safetensors` and `.gguf` checkpoints — including
 multi-GB, multi-shard ones — **instantly**, by reading only the file header. It can even
 inspect models **straight from the Hugging Face Hub** without downloading them: a 500 GB
