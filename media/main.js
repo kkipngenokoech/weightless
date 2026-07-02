@@ -635,23 +635,31 @@
     const NODE_W = 300, NODE_H = 66, VGAP = 40, PAD = 28, CX = NODE_W / 2;
     const wrap = h('div', { class: 'graph-wrap' });
     const crumb = h('div', { class: 'graph-crumb' });
-    const svg = sv('svg', { class: 'graph' });
-    // arrowhead marker
+    // HTML cards live in an absolutely-positioned layer OVER the SVG, which only
+    // draws edges. foreignObject is avoided entirely — engines mis-paint its
+    // children under ancestor transforms (text escaping the cards).
+    const svg = sv('svg', { class: 'graph-edges' });
     const marker = sv('marker', { id: 'stv-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
     marker.append(sv('path', { class: 'garrow', d: 'M 0 0 L 10 5 L 0 10 z' }));
     svg.append(sv('defs', null, marker));
-    const viewport = sv('g');
-    const gEdges = sv('g'), gNodes = sv('g');
-    viewport.append(gEdges, gNodes); svg.append(viewport);
-    const canvas = h('div', { class: 'graph-canvas' }, svg);
+    const gEdges = sv('g');
+    svg.append(gEdges);
+    const nodesLayer = h('div', { class: 'graph-nodes' });
+    const scene = h('div', { class: 'graph-scene' }, svg, nodesLayer);
+    const sizer = h('div', { class: 'graph-sizer' }, scene);
+    const canvas = h('div', { class: 'graph-canvas' }, sizer);
     const details = h('div', { class: 'graph-details' });
 
     let scale = 1, ox = PAD, oy = PAD, contentW = 0, contentH = 0, moved = false;
-    const applyT = () => viewport.setAttribute('transform', `translate(${ox},${oy}) scale(${scale})`);
-    // size the SVG to the (scaled) content so the canvas scrolls instead of shrinking cards
+    const applyT = () => { scene.style.transform = `translate(${ox}px,${oy}px) scale(${scale})`; };
+    // size the scroll area to the (scaled) content so the canvas scrolls
     function syncSize() {
-      svg.setAttribute('width', Math.max(canvas.clientWidth - 2, contentW * scale + PAD * 2));
-      svg.setAttribute('height', Math.max(canvas.clientHeight - 2, contentH * scale + PAD * 2));
+      scene.style.width = contentW + 'px';
+      scene.style.height = contentH + 'px';
+      svg.setAttribute('width', contentW || 1);
+      svg.setAttribute('height', contentH || 1);
+      sizer.style.width = Math.max(canvas.clientWidth - 2, contentW * scale + PAD * 2) + 'px';
+      sizer.style.height = Math.max(canvas.clientHeight - 2, contentH * scale + PAD * 2) + 'px';
     }
     const zoomBy = (f) => { scale = Math.min(2.5, Math.max(0.25, scale * f)); applyT(); syncSize(); };
     const focusNode = () => findByPath(root, focusPath) || root;
@@ -671,9 +679,10 @@
       const text = (dir === 'in' ? 'input: ' : 'output: ') + label;
       const PW = pillWidth(text), PH = 26, GAP = 24;
       const py = dir === 'in' ? edgeY - GAP - PH : edgeY + GAP;
-      const fo = sv('foreignObject', { x: cx - PW / 2, y: py, width: PW, height: PH });
-      fo.append(h('div', { class: 'gpill ' + (dir === 'in' ? 'gpill-in k-' + kind : 'gpill-out') }, text));
-      gNodes.append(fo);
+      nodesLayer.append(h('div', {
+        class: 'gpill ' + (dir === 'in' ? 'gpill-in k-' + kind : 'gpill-out'),
+        style: `left:${cx - PW / 2}px;top:${py}px;width:${PW}px;height:${PH}px`,
+      }, text));
       if (dir === 'in') edgeBetween(cx, py + PH, cx, edgeY, {});
       else edgeBetween(cx, edgeY, cx, py, {});
     }
@@ -685,9 +694,9 @@
       const kids = node.children.size > 0;
       const io = inferIO(node);
       const bb = item.showBB ? detectBackbone(node, model.config) : null;
-      const fo = sv('foreignObject', { x, y, width: W, height: NODE_H });
       const card = h('div', {
         class: 'gnode t-' + type.cls + (kids ? ' drillable' : '') + (repeat > 1 ? ' stacked' : '') + (selected === node.path ? ' selected' : ''),
+        style: `left:${x}px;top:${y}px;width:${W}px;height:${NODE_H}px`,
       },
         h('div', { class: 'gnode-top' },
           h('span', { class: 'gnode-name' }, /^\d+$/.test(node.key) ? '[' + node.key + ']' : (node.key || 'root')),
@@ -704,7 +713,7 @@
       card.addEventListener('dblclick', (e) => { e.stopPropagation(); if (kids) focus(node.path); });
       const openBtn = card.querySelector('.gnode-open');
       if (openBtn) openBtn.addEventListener('click', (e) => { if (moved) return; e.stopPropagation(); focus(node.path); });
-      fo.append(card); gNodes.append(fo);
+      nodesLayer.append(card);
       // input/output type pills (overview only): 'in', 'out', or true for both
       if (item.pills) {
         const cx = x + W / 2;
@@ -761,8 +770,8 @@
       const trunkX = (contentW - OW) / 2;
 
       function junction(x, y, label) {
-        gNodes.append(sv('circle', { class: 'gjunc', cx: x, cy: y, r: JR }));
-        const t = sv('text', { class: 'gjunc-lbl', x: x + 13, y: y + 4 }); t.textContent = label; gNodes.append(t);
+        gEdges.append(sv('circle', { class: 'gjunc', cx: x, cy: y, r: JR }));
+        const t = sv('text', { class: 'gjunc-lbl', x: x + 13, y: y + 4 }); t.textContent = label; gEdges.append(t);
       }
 
       // input-branch columns
@@ -785,9 +794,8 @@
         const tx = colX(nCols - 1) + OW / 2;
         const txt = 'input: ' + trunkIn.label;
         const PW = pillWidth(txt);
-        const fo = sv('foreignObject', { x: tx - PW / 2, y: laneY0 - 24 - PH, width: PW, height: PH });
-        fo.append(h('div', { class: 'gpill gpill-in k-' + trunkIn.kind }, txt));
-        gNodes.append(fo);
+        nodesLayer.append(h('div', { class: 'gpill gpill-in k-' + trunkIn.kind,
+          style: `left:${tx - PW / 2}px;top:${laneY0 - 24 - PH}px;width:${PW}px;height:${PH}px` }, txt));
         edgeBetween(tx, laneY0 - 24, junc.x, junc.y - JR, { dashed: true });
       }
       if (junc) {
@@ -838,16 +846,17 @@
         nodeBox(items[i]);
       }
       if (!items.length) {
-        const fo = sv('foreignObject', { x: 0, y: 0, width: NODE_W, height: NODE_H });
-        fo.append(h('div', { class: 'gnode t-mod' }, h('div', { class: 'gnode-name' }, 'Leaf module — no sub-modules'),
+        nodesLayer.append(h('div', { class: 'gnode t-mod', style: `left:0;top:0;width:${NODE_W}px;height:${NODE_H}px` },
+          h('div', { class: 'gnode-name' }, 'Leaf module — no sub-modules'),
           h('div', { class: 'gnode-bot' }, h('span', { class: 'gnode-io' }, 'see tensors below'))));
-        gNodes.append(fo); cursorY = NODE_H;
+        cursorY = NODE_H;
       }
       contentW = NODE_W; contentH = Math.max(cursorY - VGAP, NODE_H);
     }
     function build() {
-      gEdges.textContent = ''; gNodes.textContent = '';
+      gEdges.textContent = ''; nodesLayer.textContent = '';
       if (focusPath == null) buildOverview(); else buildSequence();
+      syncSize();
     }
     function fit() {
       const r = canvas.getBoundingClientRect();
@@ -935,16 +944,16 @@
     // anywhere also scrolls it. A small movement threshold distinguishes a
     // drag from a click, so dragging over a node moves the view, not selects.
     let down = false, sx, sy, sox, soy;
-    svg.addEventListener('mousedown', (e) => {
+    canvas.addEventListener('mousedown', (e) => {
       down = true; moved = false; sx = e.clientX; sy = e.clientY;
       sox = canvas.scrollLeft; soy = canvas.scrollTop;
     });
     window.addEventListener('mousemove', (e) => {
       if (!down) return;
-      if (!moved && Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 4) { moved = true; svg.classList.add('panning'); }
+      if (!moved && Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 4) { moved = true; canvas.classList.add('panning'); }
       if (moved) { canvas.scrollLeft = sox - (e.clientX - sx); canvas.scrollTop = soy - (e.clientY - sy); }
     });
-    window.addEventListener('mouseup', () => { down = false; svg.classList.remove('panning'); });
+    window.addEventListener('mouseup', () => { down = false; canvas.classList.remove('panning'); });
     // keep the flow fitted when the panel is resized
     if (window.ResizeObserver) new ResizeObserver(() => fit()).observe(canvas);
 
