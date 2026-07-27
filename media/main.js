@@ -71,6 +71,7 @@
     }
     return { label: 'Module', cls: 'mod' };
   }
+  const TYPE_GLYPH = { attn: '◎', mlp: '▤', embed: '⊞', norm: '≡', conv: '⌗', linear: '⊗', list: '≣', mod: '▣' };
   // guess "frozen backbone" vs "trained head" — heuristic, purely nominal
   function kindOf(topKey) {
     return /vision|language|encoder|backbone|siglip|gemma|llama|bert|clip|vit/i.test(topKey)
@@ -632,7 +633,7 @@
     let selected = null;      // path of selected node (details panel)
     let listExpanded = null;  // container path whose ×N blocks are shown individually
 
-    const NODE_W = 300, NODE_H = 66, VGAP = 40, PAD = 28, CX = NODE_W / 2;
+    const NODE_W = 300, NODE_H = 70, VGAP = 60, PAD = 28, CX = NODE_W / 2;
     const wrap = h('div', { class: 'graph-wrap' });
     const crumb = h('div', { class: 'graph-crumb' });
     // HTML cards live in an absolutely-positioned layer OVER the SVG, which only
@@ -664,12 +665,22 @@
     const zoomBy = (f) => { scale = Math.min(2.5, Math.max(0.25, scale * f)); applyT(); syncSize(); };
     const focusNode = () => findByPath(root, focusPath) || root;
 
-    const OW = 250, HGAP = 34; // overview layout
+    const OW = 250, HGAP = 40; // overview layout (nodeSep)
+    // "smoothstep" connectors: orthogonal with rounded elbows
     function edgeBetween(fx, fy, tx, ty, opts) {
       opts = opts || {};
       const my = (fy + ty) / 2;
-      gEdges.append(sv('path', { class: 'gedge ' + (opts.dashed ? 'inferred' : 'flow'), 'marker-end': 'url(#stv-arrow)',
-        d: `M ${fx} ${fy} C ${fx} ${my}, ${tx} ${my}, ${tx} ${ty}` }));
+      const dx = tx - fx;
+      let d;
+      if (Math.abs(dx) < 1) {
+        d = `M ${fx} ${fy} L ${tx} ${ty}`;
+      } else {
+        const r = Math.min(8, Math.abs(dx) / 2, Math.abs(ty - fy) / 2);
+        const s = dx > 0 ? 1 : -1;
+        d = `M ${fx} ${fy} L ${fx} ${my - r} Q ${fx} ${my} ${fx + s * r} ${my}`
+          + ` L ${tx - s * r} ${my} Q ${tx} ${my} ${tx} ${my + r} L ${tx} ${ty}`;
+      }
+      gEdges.append(sv('path', { class: 'gedge ' + (opts.dashed ? 'inferred' : 'flow'), 'marker-end': 'url(#stv-arrow)', d }));
       if (opts.label) { const t = sv('text', { class: 'gedge-lbl', x: (fx + tx) / 2 + 6, y: my + 3 }); t.textContent = opts.label; gEdges.append(t); }
     }
     function arrow(prevY, nextY, label) { edgeBetween(CX, prevY + NODE_H, CX, nextY, { label }); }
@@ -699,6 +710,7 @@
         style: `left:${x}px;top:${y}px;width:${W}px;height:${NODE_H}px`,
       },
         h('div', { class: 'gnode-top' },
+          h('span', { class: 'gnode-ic' }, TYPE_GLYPH[type.cls] || '▣'),
           h('span', { class: 'gnode-name' }, /^\d+$/.test(node.key) ? '[' + node.key + ']' : (node.key || 'root')),
           bb ? h('span', { class: 'gnode-bb' }, bb) : null,
           repeat > 1 ? h('span', { class: 'gnode-xn clickable', title: 'Show all ' + repeat + ' blocks',
@@ -847,7 +859,9 @@
       }
       if (!items.length) {
         nodesLayer.append(h('div', { class: 'gnode t-mod', style: `left:0;top:0;width:${NODE_W}px;height:${NODE_H}px` },
-          h('div', { class: 'gnode-name' }, 'Leaf module — no sub-modules'),
+          h('div', { class: 'gnode-top' },
+            h('span', { class: 'gnode-ic' }, TYPE_GLYPH.mod),
+            h('span', { class: 'gnode-name' }, 'Leaf module — no sub-modules')),
           h('div', { class: 'gnode-bot' }, h('span', { class: 'gnode-io' }, 'see tensors below'))));
         cursorY = NODE_H;
       }
