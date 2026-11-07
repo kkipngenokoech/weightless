@@ -27,7 +27,7 @@ jobs:
         run: |
           mkdir _site
           cp web/index.html web/site.css web/app.js web/parsers.js _site/
-          cp media/main.js media/style.css _site/
+          cp media/main.js media/style.css media/wl.css media/anatomy.js media/explain.js media/gallery.js _site/
           cp icon.png _site/
       - uses: actions/configure-pages@v5
         with:

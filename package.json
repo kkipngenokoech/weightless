@@ -1,7 +1,7 @@
 {
   "name": "weightless",
   "displayName": "Weightless",
-  "description": "Inspect models without loading the weights. Architecture flowcharts, tensor tables, backbone detection, reconstructed PyTorch definitions, memory & finetune estimates — header-only reads open multi-GB .safetensors and .gguf files instantly, even straight from the Hugging Face Hub.",
+  "description": "Inspect open-weight models in VS Code. Explore module graphs, transformer schematics, tensor shapes, parameter counts and model configuration. Header-only reads support local safetensors and GGUF checkpoints and the Hugging Face Hub.",
   "version": "0.1.8",
   "publisher": "kipngenokoech",
   "license": "MIT",
@@ -35,7 +35,7 @@
   "activationEvents": [],
   "main": "./extension.js",
   "scripts": {
-    "test": "node test/run.js && node test/gguf.js"
+    "test": "node test/run.js && node test/gguf.js && node test/anatomy.js"
   },
   "contributes": {
     "customEditors": [
@@ -54,6 +54,12 @@
       }
     ],
     "commands": [
+      {
+        "command": "weightless.browse",
+        "title": "Browse Open Models",
+        "category": "Weightless",
+        "icon": "$(library)"
+      },
       {
         "command": "safetensorsViewer.open",
         "title": "Open with Weightless",
@@ -93,7 +99,7 @@
     "viewsWelcome": [
       {
         "view": "weightless.models",
-        "contents": "No .safetensors or .gguf files found in this workspace.\n[Open Model from Hugging Face Hub](command:safetensorsViewer.openFromHub)\nInspect any Hub model by id — header-only, no download."
+        "contents": "No .safetensors or .gguf files found in this workspace.\n[Browse Open Models](command:weightless.browse)\nSee how GPT-2, Llama, Qwen, DeepSeek and others are built, explained in plain words.\n[Open Model from Hugging Face Hub](command:safetensorsViewer.openFromHub)"
       }
     ],
     "menus": {
@@ -105,6 +111,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "weightless.browse",
+          "when": "view == weightless.models",
+          "group": "navigation@0"
+        },
         {
           "command": "safetensorsViewer.openFromHub",
           "when": "view == weightless.models",

@@ -11,21 +11,24 @@ function getNonce() {
   return text;
 }
 
+// anatomy → gallery data → explain views → the viewer shell (order matters)
+const SCRIPTS = ['anatomy.js', 'gallery.js', 'explain.js', 'main.js'];
+
 function getHtml(webview, extUri, nonce) {
-  const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'media', 'style.css'));
-  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'media', 'main.js'));
+  const uri = (f) => webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'media', f));
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link href="${styleUri}" rel="stylesheet">
+  <link href="${uri('style.css')}" rel="stylesheet">
+  <link href="${uri('wl.css')}" rel="stylesheet">
   <title>Weightless</title>
 </head>
-<body>
+<body class="wl-body">
   <div id="app"><div class="loading">Reading header…</div></div>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
+  ${SCRIPTS.map((f) => `<script nonce="${nonce}" src="${uri(f)}"></script>`).join('\n  ')}
 </body>
 </html>`;
 }
@@ -96,30 +99,40 @@ function activate(context) {
       if (target) vscode.commands.executeCommand('vscode.openWith', target, 'safetensorsViewer.preview');
     })
   );
-  // Inspect a model straight from the Hugging Face Hub — header-only Range
-  // requests, so even 100 GB models cost a few hundred KB of traffic.
+  // Hub panels: header-only Range requests, so even 100 GB models cost a few
+  // hundred KB. The webview asks for models by id ({type:'open'}) from the gallery.
+  function hubPanel(title) {
+    const panel = vscode.window.createWebviewPanel(
+      'safetensorsViewer.hub', title, vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] }
+    );
+    panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
+    panel.webview.onDidReceiveMessage((msg) => { if (msg && msg.type === 'open' && msg.id) openHub(panel, msg.id); });
+    return panel;
+  }
+  async function openHub(panel, rawId) {
+    const id = String(rawId).trim();
+    panel.title = id.split('/').pop();
+    panel.webview.postMessage({ type: 'loading', id });
+    try {
+      const model = await loadFromHub(id);
+      panel.webview.postMessage({ type: 'model', fileName: id, ...model });
+    } catch (err) {
+      panel.webview.postMessage({ type: 'error', message: String((err && err.message) || err) });
+    }
+  }
   context.subscriptions.push(
+    vscode.commands.registerCommand('weightless.browse', () => {
+      const panel = hubPanel('Open models');
+      panel.webview.postMessage({ type: 'gallery' });
+    }),
     vscode.commands.registerCommand('safetensorsViewer.openFromHub', async () => {
       const id = await vscode.window.showInputBox({
         prompt: 'Hugging Face model id (weights are NOT downloaded — header only)',
         placeHolder: 'e.g. google/gemma-3-270m or Qwen/Qwen2.5-7B-Instruct',
         ignoreFocusOut: true,
       });
-      if (!id) return;
-      const panel = vscode.window.createWebviewPanel(
-        'safetensorsViewer.hub', `HF: ${id.trim()}`, vscode.ViewColumn.Active,
-        { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] }
-      );
-      panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
-      try {
-        const model = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `Reading ${id.trim()} headers from the Hub…` },
-          () => loadFromHub(id.trim())
-        );
-        panel.webview.postMessage({ type: 'model', fileName: id.trim(), ...model });
-      } catch (err) {
-        panel.webview.postMessage({ type: 'error', message: String((err && err.message) || err) });
-      }
+      if (id) openHub(hubPanel(`HF: ${id.trim()}`), id);
     })
   );
 }

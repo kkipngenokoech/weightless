@@ -6,6 +6,8 @@
   'use strict';
   const app = document.getElementById('app');
   let MODEL = null;
+  let graphId = 0;
+  const viewDisposers = [];
 
   // ---------- formatting ----------
   const fmtNum = (n) => {
@@ -29,7 +31,8 @@
   }
   function buildTree(tensors) {
     const root = newNode('', '');
-    for (const t of tensors) {
+    for (const original of tensors) {
+      const t = { ...original, params: window.WLA ? window.WLA.realParams(original) : original.params };
       const segs = t.name.split('.');
       const leaf = segs.pop(); // e.g. "weight" / "bias"
       let node = root;
@@ -72,52 +75,18 @@
     return { label: 'Module', cls: 'mod' };
   }
   const TYPE_GLYPH = { attn: '◎', mlp: '▤', embed: '⊞', norm: '≡', conv: '⌗', linear: '⊗', list: '≣', mod: '▣' };
-  // guess "frozen backbone" vs "trained head" — heuristic, purely nominal
-  function kindOf(topKey) {
-    return /vision|language|encoder|backbone|siglip|gemma|llama|bert|clip|vit/i.test(topKey)
-      ? { label: 'likely backbone', cls: 'frozen' }
-      : { label: 'head / other', cls: 'trained' };
-  }
-
   // ---------- rendering ----------
   function h(tag, attrs, ...kids) {
     const e = document.createElement(tag);
     if (attrs) for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
       if (k === 'class') e.className = v;
       else if (k === 'html') e.innerHTML = v;
       else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
       else e.setAttribute(k, v);
     }
-    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(kid));
+    for (const kid of kids.flat()) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(kid));
     return e;
-  }
-
-  function summaryBar(model) {
-    const total = model.tensors.reduce((a, t) => a + t.params, 0);
-    const dt = {};
-    for (const t of model.tensors) dt[t.dtype] = (dt[t.dtype] || 0) + 1;
-    const chips = Object.entries(dt).sort((a, b) => b[1] - a[1])
-      .map(([d, c]) => h('span', { class: 'chip' }, `${d} · ${c}`));
-    const cards = [
-      ['Parameters', fmtNum(total)],
-      ['Tensors', String(model.tensors.length)],
-      ['File size', fmtBytes(model.fileSize)],
-      ['Shards', model.sharded ? String(model.shardFiles.length) : '1'],
-    ].map(([k, v]) => h('div', { class: 'card' }, h('div', { class: 'card-v' }, v), h('div', { class: 'card-k' }, k)));
-    return h('div', { class: 'summary' },
-      h('div', { class: 'title' }, model.fileName),
-      h('div', { class: 'cards' }, ...cards),
-      h('div', { class: 'chips' }, h('span', { class: 'chips-label' }, 'dtypes:'), ...chips));
-  }
-
-  function tabs(names, onSwitch) {
-    const bar = h('div', { class: 'tabs' });
-    const btns = names.map((n, i) => h('button', {
-      class: 'tab' + (i === 0 ? ' active' : ''),
-      onclick: () => { [...bar.children].forEach((b) => b.classList.remove('active')); btns[i].classList.add('active'); onSwitch(n); },
-    }, n));
-    btns.forEach((b) => bar.append(b));
-    return bar;
   }
 
   // ---------- flow ordering + graph helpers ----------
@@ -153,14 +122,6 @@
     return [...node.children.values()].filter((c) => c.params > 0)
       .sort((a, b) => b.params - a.params).map((c) => ({ node: c, repeat: 1 }));
   }
-  function expandDepth(node, expanded, maxDepth) {
-    (function walk(n, d) {
-      if (d > maxDepth || n.children.size === 0) return;
-      expanded.add(n.path);
-      for (const ch of graphChildren(n)) walk(ch.node, d + 1);
-    })(node, 0);
-  }
-  function expandAll(tops, expanded) { for (const t of tops) expandDepth(t, expanded, 6); }
   function findByPath(root, path) {
     if (!path) return root;
     let node = root;
@@ -309,110 +270,6 @@
     for (const [re, label] of BACKBONE_PATTERNS) if (re.test(s)) return label;
     return structFingerprint(node);
   }
-  // Exact provenance: the checkpoint this model was actually initialized from,
-  // when the sidecar files recorded it. This is a stored fact, not an inference.
-  function provenanceOf(node, model) {
-    const out = [];
-    const cfg = node.path ? scopedConfig(model.config, node.key) : model.config;
-    if (cfg && cfg._name_or_path) out.push({ name: String(cfg._name_or_path), src: 'config.json · _name_or_path' });
-    if (!node.path) {
-      const ad = model.extras && model.extras.Adapter;
-      if (ad && ad.data && ad.data.base_model_name_or_path)
-        out.push({ name: String(ad.data.base_model_name_or_path), src: ad.file + ' · base_model_name_or_path' });
-      const tr = model.extras && model.extras.Training;
-      if (tr && tr.data) for (const k of ['model_name_or_path', 'pretrained_model_name_or_path', 'base_model', 'model_name'])
-        if (tr.data[k]) { out.push({ name: String(tr.data[k]), src: tr.file + ' · ' + k }); break; }
-      if (model.meta) for (const k of ['base_model', 'model_name', 'source'])
-        if (model.meta[k]) { out.push({ name: String(model.meta[k]), src: 'header __metadata__ · ' + k }); break; }
-    }
-    const seen = new Set();
-    return out.filter((p) => p.name && !seen.has(p.name) && seen.add(p.name));
-  }
-
-  // ---------- composition summary ----------
-  // Counts actual parametric layers in a subtree, straight from weight shapes.
-  function summarize(node) {
-    const counts = { linear: 0, attn: 0, mlp: 0, norm: 0, embed: 0, conv: 0 };
-    const lists = []; const dt = {};
-    let params = 0, bytes = 0, tensors = 0;
-    (function walk(n) {
-      const kids = [...n.children.values()];
-      if (kids.length && kids.every((c) => /^\d+$/.test(c.key))) lists.push({ key: n.key, size: kids.length });
-      if (kids.length === 0) {
-        const w = n.tensors.find((t) => t.leaf === 'weight') || n.tensors[0];
-        if (w && w.shape) {
-          if (w.shape.length >= 3) counts.conv++;
-          else if (w.shape.length === 2) (/embed/.test(n.path.toLowerCase()) ? counts.embed++ : counts.linear++);
-          else if (w.shape.length === 1) counts.norm++;
-        }
-      } else {
-        const kk = n.key.toLowerCase();
-        if (/self_attn|attention|\battn\b/.test(kk)) counts.attn++;
-        else if (/mlp|feed_forward|\bffn\b|moe/.test(kk)) counts.mlp++;
-      }
-      for (const t of n.tensors) { params += t.params; bytes += t.bytes; tensors++; dt[t.dtype] = (dt[t.dtype] || 0) + 1; }
-      for (const c of n.children.values()) walk(c);
-    })(node);
-    return { counts, lists, dt, params, bytes, tensors };
-  }
-  function pickConfig(config, scopeKey) {
-    if (!config) return null;
-    const k = (scopeKey || '').toLowerCase();
-    for (const [key, val] of Object.entries(config)) {
-      if (val && typeof val === 'object' && /config$/i.test(key)) {
-        const kk = key.toLowerCase();
-        if ((/vision|image/.test(k) && /vision|image/.test(kk)) ||
-            (/text|language|decoder/.test(k) && /text|language/.test(kk))) return val;
-      }
-    }
-    return config;
-  }
-  function configFacts(cfg) {
-    if (!cfg) return [];
-    const pick = (...keys) => { for (const key of keys) if (cfg[key] != null && typeof cfg[key] !== 'object') return cfg[key]; return null; };
-    return [
-      ['activation', pick('hidden_act', 'activation_function', 'activation', 'hidden_activation', 'act_fn')],
-      ['hidden', pick('hidden_size', 'n_embd', 'd_model')],
-      ['layers', pick('num_hidden_layers', 'n_layer', 'num_layers')],
-      ['heads', pick('num_attention_heads', 'n_head')],
-      ['kv-heads', pick('num_key_value_heads')],
-      ['ffn', pick('intermediate_size', 'ffn_dim', 'n_inner')],
-      ['vocab', pick('vocab_size')],
-    ].filter(([, v]) => v != null);
-  }
-  function compositionEl(node, config, model) {
-    const s = summarize(node);
-    const wrap = h('div', { class: 'sumcard' });
-    const chips = h('div', { class: 'sum-chips' });
-    const bb = detectBackbone(node, config);
-    if (bb) chips.append(h('span', { class: 'sum-chip bb', title: 'architecture family (from config.json / naming / structure)' }, h('b', null, bb)));
-    if (model) for (const p of provenanceOf(node, model))
-      chips.append(h('span', { class: 'sum-chip bb', title: p.src }, 'base: ', h('b', null, p.name)));
-    const add = (label, n, cls) => { if (n) chips.append(h('span', { class: 'sum-chip ' + (cls || '') }, h('b', null, String(n)), ' ' + label)); };
-    add('Linear', s.counts.linear, 't-linear');
-    add('Attention', s.counts.attn, 't-attn');
-    add('MLP', s.counts.mlp, 't-mlp');
-    add('Norm', s.counts.norm, 't-norm');
-    add('Embedding', s.counts.embed, 't-embed');
-    add('Conv', s.counts.conv, 't-conv');
-    if (!chips.children.length) chips.append(h('span', { class: 'sum-chip' }, 'no parametric layers'));
-    wrap.append(chips);
-    if (s.lists.length) {
-      const b = h('div', { class: 'sum-sub' }, h('span', { class: 'sum-k' }, 'blocks: '));
-      s.lists.sort((a, c) => c.size - a.size).slice(0, 8).forEach((l) => b.append(h('span', { class: 'sum-mini' }, `${l.key} ×${l.size}`)));
-      wrap.append(b);
-    }
-    const cf = configFacts(pickConfig(config, node.key || (node.path || '').split('.')[0]));
-    if (cf.length) {
-      const c = h('div', { class: 'sum-sub' }, h('span', { class: 'sum-k' }, 'from config.json: '));
-      cf.forEach(([k, v]) => c.append(h('span', { class: 'sum-mini' }, `${k} ${v}`)));
-      wrap.append(c);
-    } else if (!node.path) {
-      wrap.append(h('div', { class: 'sum-note' }, 'Activation functions aren’t stored in weights — add a config.json next to the file to show them.'));
-    }
-    return wrap;
-  }
-
   // ---------- PyTorch-style definition, reconstructed from tensor shapes ----------
   function codeFor(node) {
     const lines = []; const MAX = 400; let truncated = false;
@@ -533,78 +390,6 @@
       block);
   }
 
-  // ---------- I/O sizes + training footprint ----------
-  function ioTrainCard(model, root) {
-    const ts = allTensors(root);
-    const chipEl = (text, cls, title) => h('span', { class: 'sum-chip ' + (cls || ''), title: title || '' }, text);
-    const chips = h('div', { class: 'sum-chips' });
-
-    // image input resolution: patch conv (in_channels=3) + position-embedding grid
-    const conv = ts.find((t) => t.shape.length === 4 && t.shape[1] === 3);
-    if (conv) {
-      const comp = conv.mod.split('.')[0];
-      const pos = ts.find((p) => p.mod.split('.')[0] === comp && p.shape.length === 2 &&
-        /position_embedding|pos_embed/.test(p.mod + '.' + p.leaf));
-      let done = false;
-      if (pos) for (const n of [pos.shape[0], pos.shape[0] - 1]) {
-        const g = Math.sqrt(n);
-        if (Number.isInteger(g)) {
-          chips.append(chipEl(`image input ≈ ${g * conv.shape[2]}×${g * conv.shape[3]}`, 't-conv',
-            `${g}×${g} patches of ${conv.shape[2]}px — derived from patch + position embeddings`));
-          done = true; break;
-        }
-      }
-      if (!done) chips.append(chipEl(`image patch ${conv.shape[2]}×${conv.shape[3]}px`, 't-conv', 'patch embedding kernel'));
-    }
-    // context length: learned position embeddings, else config
-    const tpos = ts.find((t) => t.shape.length === 2 && !/vision|patch|image/.test(t.mod) &&
-      /(^|\.)(wpe|embed_positions|position_embeddings?)($|\.)/.test(t.mod + '.' + t.leaf));
-    const cfgCtx = model.config && (model.config.max_position_embeddings ||
-      (model.config.text_config && model.config.text_config.max_position_embeddings));
-    if (tpos) chips.append(chipEl(`context ${fmtNum(tpos.shape[0])}`, 't-embed', 'learned position embeddings'));
-    else if (cfgCtx) chips.append(chipEl(`context ${fmtNum(cfgCtx)}`, 't-embed', 'max_position_embeddings from config.json'));
-    // vocab + tied/untied output projection
-    const emb = ts.filter((t) => t.shape.length === 2 &&
-      /embed_tokens|word_embeddings|\bwte\b|tok_embeddings|token_embd/.test(t.mod + '.' + t.leaf))
-      .sort((a, b) => b.shape[0] - a.shape[0])[0];
-    if (emb) {
-      chips.append(chipEl(`vocab ${fmtNum(emb.shape[0])}`, 't-embed'));
-      const sep = ts.some((t) => t !== emb && t.shape.length === 2 && t.shape[0] === emb.shape[0] &&
-        /head|logits|output/.test(t.mod + '.' + t.leaf));
-      chips.append(chipEl(sep ? 'separate lm_head' : 'no separate lm_head (tied or headless)', 't-linear',
-        sep ? 'a vocab-sized output projection is stored' : 'no vocab-sized output matrix in the file'));
-    }
-    // LoRA adapter detection
-    const loraA = model.tensors.filter((t) => /lora_a/i.test(t.name));
-    if (loraA.length) {
-      const rank = Math.min(...loraA.map((t) => Math.min(...t.shape)));
-      const targets = new Set(loraA.map((t) => t.name.replace(/\.lora_a.*/i, ''))).size;
-      chips.append(chipEl(`LoRA · rank ${rank} · ${targets} target modules`, 'bb'));
-    }
-
-    // memory: weights at common precisions + finetune rules of thumb
-    const P = root.params;
-    const mem = h('div', { class: 'sum-sub' }, h('span', { class: 'sum-k' }, 'weights in memory: '));
-    [['as stored', model.fileSize], ['bf16', 2 * P], ['fp32', 4 * P], ['int8', P], ['int4', Math.round(P / 2)]]
-      .forEach(([k, v]) => mem.append(h('span', { class: 'sum-mini' }, `${k} ${fmtBytes(v)}`)));
-    const tr = h('div', { class: 'sum-sub' }, h('span', { class: 'sum-k' }, 'finetune est.: '));
-    tr.append(h('span', { class: 'sum-mini', title: 'bf16 weights + bf16 grads + fp32 master/momentum/variance ≈ 16 bytes/param' },
-      `full (AdamW) ≈ ${fmtBytes(16 * P)}`));
-    tr.append(h('span', { class: 'sum-mini', title: 'frozen bf16 weights; adapter params add ~1–2%' },
-      `LoRA ≈ ${fmtBytes(2 * P)} + adapter`));
-    const tc = model.config && (model.config.text_config || model.config);
-    if (tc && tc.num_hidden_layers && tc.num_attention_heads && tc.hidden_size) {
-      const kvH = tc.num_key_value_heads || tc.num_attention_heads;
-      const hd = tc.head_dim || Math.round(tc.hidden_size / tc.num_attention_heads);
-      tr.append(h('span', { class: 'sum-mini', title: `2 × ${tc.num_hidden_layers} layers × ${kvH} kv-heads × ${hd} head_dim × 2 bytes` },
-        `KV cache ≈ ${fmtBytes(2 * tc.num_hidden_layers * kvH * hd * 2 * 1024)} / 1k tokens (bf16)`));
-    }
-
-    const wrap = h('div', { class: 'sumcard' }, chips, mem, tr,
-      h('div', { class: 'sum-note' }, 'estimates are rules of thumb — activations, KV cache growth and framework overhead not included'));
-    return wrap;
-  }
-
   // Nominal ordering of a block's sub-modules so the flow reads
   // norm → attention → norm → MLP. Sequence within a block is not knowable from
   // weights alone, so this is a heuristic (see the hint under the canvas).
@@ -628,9 +413,10 @@
   // Returns { el, focus(path) }. Shows one level at a time: the focused module's
   // sub-modules as a top→bottom pipeline of boxes joined by arrows. Drill into a
   // box (double-click / ⤢) to descend; breadcrumb / Up to ascend.
-  function graphView(model, root, total, onScope) {
+  function graphView(model, root, total, onScope, options = {}) {
     let focusPath = null;     // null = model root (top-level components)
     let selected = null;      // path of selected node (details panel)
+    let hierarchyPage = 0;
     let listExpanded = null;  // container path whose ×N blocks are shown individually
 
     const NODE_W = 300, NODE_H = 70, VGAP = 60, PAD = 28, CX = NODE_W / 2;
@@ -640,7 +426,8 @@
     // draws edges. foreignObject is avoided entirely — engines mis-paint its
     // children under ancestor transforms (text escaping the cards).
     const svg = sv('svg', { class: 'graph-edges' });
-    const marker = sv('marker', { id: 'stv-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
+    const arrowId = 'stv-arrow-' + (++graphId);
+    const marker = sv('marker', { id: arrowId, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
     marker.append(sv('path', { class: 'garrow', d: 'M 0 0 L 10 5 L 0 10 z' }));
     svg.append(sv('defs', null, marker));
     const gEdges = sv('g');
@@ -680,7 +467,7 @@
         d = `M ${fx} ${fy} L ${fx} ${my - r} Q ${fx} ${my} ${fx + s * r} ${my}`
           + ` L ${tx - s * r} ${my} Q ${tx} ${my} ${tx} ${my + r} L ${tx} ${ty}`;
       }
-      gEdges.append(sv('path', { class: 'gedge ' + (opts.dashed ? 'inferred' : 'flow'), 'marker-end': 'url(#stv-arrow)', d }));
+      gEdges.append(sv('path', { class: 'gedge ' + (opts.dashed ? 'inferred' : 'flow'), 'marker-end': `url(#${arrowId})`, d }));
       if (opts.label) { const t = sv('text', { class: 'gedge-lbl', x: (fx + tx) / 2 + 6, y: my + 3 }); t.textContent = opts.label; gEdges.append(t); }
     }
     function arrow(prevY, nextY, label) { edgeBetween(CX, prevY + NODE_H, CX, nextY, { label }); }
@@ -700,12 +487,13 @@
     function nodeBox(item) {
       const { node, repeat } = item;
       const x = item.x || 0, y = item.y, W = item.w || NODE_W;
-      const type = inferType(node);
+      const type = options.hierarchy ? { cls: node.children.size ? 'mod' : 'linear', label: node.children.size ? `${node.children.size} modules` : `${node.tensors.length} tensors` } : inferType(node);
       const pct = (node.params / total) * 100;
       const kids = node.children.size > 0;
-      const io = inferIO(node);
+      const io = options.hierarchy ? null : inferIO(node);
       const bb = item.showBB ? detectBackbone(node, model.config) : null;
       const card = h('div', {
+        role: 'button', tabindex: '0', 'aria-label': node.path || 'Model', 'aria-pressed': String(selected === node.path),
         class: 'gnode t-' + type.cls + (kids ? ' drillable' : '') + (repeat > 1 ? ' stacked' : '') + (selected === node.path ? ' selected' : ''),
         style: `left:${x}px;top:${y}px;width:${W}px;height:${NODE_H}px`,
       },
@@ -722,6 +510,11 @@
           h('span', { class: 'gnode-pct' }, `${fmtNum(node.params)} · ${pct.toFixed(1)}%`)),
         h('div', { class: 'gbar' }, h('div', { class: 'gbar-fill', style: `width:${Math.max(pct, 1.5)}%` })));
       card.addEventListener('click', (e) => { if (moved) return; e.stopPropagation(); selected = node.path; build(); showDetails(node); });
+      card.addEventListener('keydown', (e) => {
+        if (e.target !== card) return;
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selected = node.path; build(); showDetails(node); }
+        if (e.key === 'ArrowRight' && kids) { e.preventDefault(); focus(node.path); }
+      });
       card.addEventListener('dblclick', (e) => { e.stopPropagation(); if (kids) focus(node.path); });
       const openBtn = card.querySelector('.gnode-open');
       if (openBtn) openBtn.addEventListener('click', (e) => { if (moved) return; e.stopPropagation(); focus(node.path); });
@@ -867,9 +660,34 @@
       }
       contentW = NODE_W; contentH = Math.max(cursorY - VGAP, NODE_H);
     }
+    function buildHierarchy() {
+      const parent = focusNode();
+      const expandedList = listExpanded === focusPath && listInfo(parent);
+      const children = expandedList
+        ? [...parent.children.values()].sort((a, b) => Number(a.key) - Number(b.key)).map((node) => ({ node, repeat: 1 }))
+        : graphChildren(parent);
+      const pageSize = 12;
+      const pageCount = Math.max(1, Math.ceil(children.length / pageSize));
+      hierarchyPage = Math.min(hierarchyPage, pageCount - 1);
+      const visible = children.slice(hierarchyPage * pageSize, (hierarchyPage + 1) * pageSize);
+      contentW = visible.length ? NODE_W * 2 + 100 : NODE_W;
+      contentH = Math.max(NODE_H, visible.length * 100 - 30);
+      nodeBox({ node: parent, repeat: 1, x: 0, y: 0 });
+      visible.forEach((item, index) => {
+        const y = index * 100;
+        gEdges.append(sv('path', { class: 'gedge flow', 'marker-end': `url(#${arrowId})`,
+          d: `M ${NODE_W} ${NODE_H / 2} H ${NODE_W + 50} V ${y + NODE_H / 2} H ${NODE_W + 100}` }));
+        nodeBox({ ...item, x: NODE_W + 100, y });
+      });
+      pageLabel.textContent = `${hierarchyPage + 1} / ${pageCount}`;
+      previousPage.disabled = hierarchyPage === 0;
+      nextPage.disabled = hierarchyPage === pageCount - 1;
+      pageControls.hidden = pageCount === 1;
+    }
     function build() {
       gEdges.textContent = ''; nodesLayer.textContent = '';
-      if (focusPath == null) buildOverview(); else buildSequence();
+      if (options.hierarchy) buildHierarchy();
+      else if (focusPath == null) buildOverview(); else buildSequence();
       syncSize();
     }
     function fit() {
@@ -905,11 +723,12 @@
             : h('span', { class: 'crumb-link', onclick: () => { listExpanded = focusPath; renderCrumb(); build(); requestAnimationFrame(fit); } }, `show all ${li.count} blocks`));
         }
       } else {
-        crumb.append(h('span', { class: 'crumb-note' }, ' — overview · input/output types read from weights · dashed = inferred wiring'));
+        crumb.append(h('span', { class: 'crumb-note' }, ' — overview'));
       }
     }
     function showDetails(node) {
       if (onScope) onScope(node || root);
+      if (options.externalDetails) return;
       details.textContent = '';
       if (!node) { details.append(h('div', { class: 'gd-empty' }, 'Click a node to see its tensors, shapes and dtypes. Double-click (or ⤢) to drill in.')); return; }
       const io = inferIO(node);
@@ -949,7 +768,7 @@
       if (ts.length > 200) details.append(h('div', { class: 'gd-empty' }, `… ${ts.length - 200} more tensors`));
     }
     function focus(path, opts) {
-      focusPath = path; selected = null;
+      focusPath = path; selected = path; hierarchyPage = 0;
       if (!opts || !opts.keepList) listExpanded = null;
       renderCrumb(); build(); showDetails(path ? findByPath(root, path) : null); requestAnimationFrame(fit);
     }
@@ -962,181 +781,298 @@
       down = true; moved = false; sx = e.clientX; sy = e.clientY;
       sox = canvas.scrollLeft; soy = canvas.scrollTop;
     });
-    window.addEventListener('mousemove', (e) => {
+    const moveCanvas = (e) => {
       if (!down) return;
       if (!moved && Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 4) { moved = true; canvas.classList.add('panning'); }
       if (moved) { canvas.scrollLeft = sox - (e.clientX - sx); canvas.scrollTop = soy - (e.clientY - sy); }
+    };
+    const releaseCanvas = () => { down = false; canvas.classList.remove('panning'); };
+    window.addEventListener('mousemove', moveCanvas);
+    window.addEventListener('mouseup', releaseCanvas);
+    const resizeObserver = window.ResizeObserver ? new ResizeObserver(() => fit()) : null;
+    if (resizeObserver) resizeObserver.observe(canvas);
+    viewDisposers.push(() => {
+      window.removeEventListener('mousemove', moveCanvas);
+      window.removeEventListener('mouseup', releaseCanvas);
+      if (resizeObserver) resizeObserver.disconnect();
     });
-    window.addEventListener('mouseup', () => { down = false; canvas.classList.remove('panning'); });
-    // keep the flow fitted when the panel is resized
-    if (window.ResizeObserver) new ResizeObserver(() => fit()).observe(canvas);
 
     const up = () => { if (focusPath == null) return; const segs = focusPath.split('.'); segs.pop(); focus(segs.length ? segs.join('.') : null); };
     const toolbar = h('div', { class: 'graph-toolbar' },
-      h('button', { class: 'gbtn', onclick: up }, '⬆ Up'),
+      h('button', { class: 'gbtn', 'aria-label': 'Parent module', onclick: up }, '↑ Up'),
       h('span', { class: 'gspacer' }),
       h('span', { class: 'graph-hint' }, 'double-click a box to drill in · drag or scroll to move'),
-      h('button', { class: 'gbtn', onclick: () => zoomBy(1 / 1.15) }, '–'),
-      h('button', { class: 'gbtn', onclick: () => zoomBy(1.15) }, '+'),
+      h('button', { class: 'gbtn', 'aria-label': 'Zoom out', onclick: () => zoomBy(1 / 1.15) }, '–'),
+      h('button', { class: 'gbtn', 'aria-label': 'Zoom in', onclick: () => zoomBy(1.15) }, '+'),
       h('button', { class: 'gbtn', onclick: fit }, 'Fit'));
 
+    const pageLabel = h('span', { class: 'wa-count' });
+    const previousPage = h('button', { class: 'gbtn', 'aria-label': 'Previous graph page', onclick: () => { hierarchyPage--; build(); fit(); } }, 'Previous');
+    const nextPage = h('button', { class: 'gbtn', 'aria-label': 'Next graph page', onclick: () => { hierarchyPage++; build(); fit(); } }, 'Next');
+    const pageControls = h('div', { class: 'wa-graph-pages', hidden: true }, previousPage, pageLabel, nextPage);
     renderCrumb(); showDetails(null); build(); applyT();
-    wrap.append(toolbar, crumb, canvas, details);
+    wrap.append(toolbar, crumb, canvas, pageControls);
+    if (!options.externalDetails) wrap.append(details);
     requestAnimationFrame(fit);
-    return { el: wrap, focus };
-  }
-
-  // ---------- indented tree view (kept as a toggle) ----------
-  function treeView(model, root, total) {
-    const tops = [...root.children.values()].sort((a, b) => b.params - a.params);
-    const tree = h('div', { class: 'tree' });
-    function renderNode(node, depth, container) {
-      const kids = [...node.children.values()].sort((a, b) => b.params - a.params);
-      const numeric = kids.length > 0 && kids.every((k) => /^\d+$/.test(k.key));
-      const type = inferType(node);
-      const pct = (node.params / total) * 100;
-      const hasKids = kids.length > 0 || node.tensors.length > 0;
-      const row = h('div', { class: 'node', style: `padding-left:${depth * 16}px` });
-      const caret = h('span', { class: 'caret' + (hasKids ? '' : ' leaf') }, hasKids ? '▸' : '·');
-      const body = h('div', { class: 'node-children' });
-      body.style.display = 'none';
-      let open = false;
-      row.append(caret,
-        h('span', { class: 'node-name' }, node.key || 'root'),
-        h('span', { class: 'type ' + type.cls }, type.label),
-        h('span', { class: 'node-params' }, `${fmtNum(node.params)} · ${pct.toFixed(1)}%`));
-      if (hasKids) row.addEventListener('click', () => {
-        open = !open; caret.textContent = open ? '▾' : '▸'; body.style.display = open ? 'block' : 'none';
-      });
-      container.append(row, body);
-      for (const t of node.tensors) {
-        body.append(h('div', { class: 'tensor-leaf', style: `padding-left:${(depth + 1) * 16 + 14}px` },
-          h('span', { class: 'tl-name' }, t.leaf),
-          h('span', { class: 'tl-shape' }, '[' + t.shape.join(', ') + ']'),
-          h('span', { class: 'tl-dtype' }, t.dtype)));
-      }
-      if (numeric) {
-        body.append(h('div', { class: 'repeat-note', style: `padding-left:${(depth + 1) * 16}px` },
-          `${kids.length}× repeated block — showing block [0]`));
-        renderNode(kids.find((k) => k.key === '0') || kids[0], depth + 1, body);
-      } else {
-        for (const c of kids) renderNode(c, depth + 1, body);
-      }
-    }
-    for (const c of tops) renderNode(c, 0, tree);
-    return tree;
-  }
-
-  function archView(model) {
-    const root = buildTree(model.tensors);
-    const total = root.params || 1;
-    const wrap = h('div', { class: 'arch' });
-
-    // Composition card + Code view — scope follows the current graph selection/focus.
-    const compScope = h('div', { class: 'comp-scope' });
-    const codeView = h('div', { class: 'code-view' });
-    let scopeNode = root;
-    function buildCodeView() {
-      codeView.textContent = '';
-      codeView.append(codeBlockEl(scopeNode.path || 'whole model', codeFor(scopeNode)));
-    }
-    function setComp(node) {
-      scopeNode = node || root;
-      compScope.textContent = '';
-      compScope.append(
-        h('div', { class: 'comp-scope-label' }, node && node.path ? node.path : 'whole model'),
-        compositionEl(scopeNode, model.config, model));
-      if (codeView.style.display !== 'none') buildCodeView();
-    }
-
-    // Build the graph once; the Components strip drives it via graph.focus().
-    // onScope fires whenever a node/component is selected or focused.
-    const graph = graphView(model, root, total, setComp);
-    const tree = treeView(model, root, total);
-
-    // top-level component strip (clickable → focus that path in the graph)
-    const tops = [...root.children.values()].sort((a, b) => b.params - a.params);
-    const strip = h('div', { class: 'components' });
-    for (const c of tops) {
-      const pct = (c.params / total) * 100;
-      const kind = kindOf(c.key);
-      const io = ioLabel(inferIO(c));
-      const bb = detectBackbone(c, model.config);
-      strip.append(h('div', { class: 'component clickable', title: 'Click to zoom into this path',
-        onclick: () => { showGraph(); graph.focus(c.key); } },
-        h('div', { class: 'comp-head' }, h('span', { class: 'comp-name' }, c.key),
-          h('span', { class: 'badge ' + kind.cls, title: kind.label }, bb || kind.label)),
-        h('div', { class: 'bar' }, h('div', { class: 'bar-fill', style: `width:${pct.toFixed(1)}%` })),
-        h('div', { class: 'comp-meta' },
-          `${fmtNum(c.params)} params · ${pct.toFixed(1)}%`, io ? h('span', { class: 'comp-io' }, io) : null)));
-    }
-    wrap.append(h('div', { class: 'section-label' }, 'Components'), strip);
-
-    // composition (layer counts, blocks, config hyper-params) — updates on selection
-    wrap.append(h('div', { class: 'section-label' }, 'Composition'), compScope);
-
-    // trainer-facing facts: I/O sizes, vocab, memory & finetune footprint
-    wrap.append(h('div', { class: 'section-label' }, 'I/O & training footprint'), ioTrainCard(model, root));
-
-    // Graph / Tree / Code toggle (built once, shown/hidden)
-    const viewBox = h('div', { class: 'arch-view' }, graph.el, tree, codeView);
-    tree.style.display = 'none'; codeView.style.display = 'none';
-    const bG = h('button', { class: 'seg-btn active' }, 'Graph');
-    const bT = h('button', { class: 'seg-btn' }, 'Tree');
-    const bC = h('button', { class: 'seg-btn' }, 'Code');
-    function activate(btn, el) {
-      for (const b of [bG, bT, bC]) b.classList.toggle('active', b === btn);
-      for (const e of [graph.el, tree, codeView]) e.style.display = e === el ? '' : 'none';
-    }
-    function showGraph() { activate(bG, graph.el); }
-    bG.onclick = showGraph;
-    bT.onclick = () => activate(bT, tree);
-    bC.onclick = () => { buildCodeView(); activate(bC, codeView); };
-    wrap.append(h('div', { class: 'arch-head' },
-      h('div', { class: 'section-label', style: 'margin:0' }, 'Architecture'),
-      h('div', { class: 'seg' }, bG, bT, bC)));
-    wrap.append(viewBox);
-    return wrap;
-  }
-
-  function tensorsView(model) {
-    const wrap = h('div', { class: 'tensors' });
-    const search = h('input', { class: 'search', type: 'text', placeholder: 'Filter tensors by name…' });
-    const table = h('table', { class: 'ttable' });
-    const rows = model.tensors.slice().sort((a, b) => b.params - a.params);
-    const layerOf = (t) => {
-      if (!/\.weight$/.test(t.name)) return '';
-      if (t.shape.length === 2) return /embed/.test(t.name.toLowerCase()) ? 'Embedding' : `Linear ${t.shape[1]}→${t.shape[0]}`;
-      if (t.shape.length === 1) return 'Norm';
-      if (t.shape.length >= 3) return `Conv (${t.shape.slice(2).join('×')})`;
-      return '';
+    const select = (path) => {
+      const node = findByPath(root, path);
+      if (!node) return;
+      focusPath = path ? path.split('.').slice(0, -1).join('.') || null : null;
+      selected = node.path;
+      hierarchyPage = 0; listExpanded = focusPath;
+      // Reveal the selected child on its graph page, including numeric blocks.
+      const parent = focusNode();
+      const children = listInfo(parent) ? [...parent.children.values()].sort((a, b) => Number(a.key) - Number(b.key)) : graphChildren(parent).map((item) => item.node);
+      hierarchyPage = Math.max(0, Math.floor(children.findIndex((child) => child.path === path) / 12));
+      renderCrumb(); build(); showDetails(node); requestAnimationFrame(fit);
     };
-    function draw(filter) {
-      table.innerHTML = '';
-      table.append(h('tr', null,
-        h('th', null, 'Name'), h('th', null, 'Layer'), h('th', null, 'Shape'), h('th', null, 'dtype'),
-        h('th', null, 'Params'), h('th', null, 'Size'), model.sharded ? h('th', null, 'Shard') : null));
-      let shown = 0;
-      for (const t of rows) {
-        if (filter && !t.name.toLowerCase().includes(filter)) continue;
-        shown++;
-        if (shown > 4000) break; // guard huge tables
-        table.append(h('tr', null,
-          h('td', { class: 'tname' }, t.name),
-          h('td', { class: 'gd-ltype mono' }, layerOf(t)),
-          h('td', { class: 'mono' }, '[' + t.shape.join(', ') + ']'),
-          h('td', null, t.dtype),
-          h('td', { class: 'mono' }, fmtNum(t.params)),
-          h('td', { class: 'mono' }, fmtBytes(t.bytes)),
-          model.sharded ? h('td', { class: 'shard' }, t.shard) : null));
+    return { el: wrap, focus, select };
+
+  }
+
+  function tensorsView(model, options = {}) {
+    const wrap = h('div', { class: 'tensors' });
+    const search = h('input', { class: 'search', type: 'search', 'aria-label': 'Filter scoped tensors', placeholder: 'Filter by name, shape, or dtype' });
+    const table = h('table', { class: 'ttable' });
+    const count = h('span', { class: 'count', role: 'status' });
+    const pageLabel = h('span', { class: 'wa-count' });
+    let scope = '', page = 0, sortKey = 'params', descending = true, selectedTensor = null;
+    const pageSize = 100;
+    const collator = new Intl.Collator('en', { numeric: true });
+    const rows = model.tensors.map((tensor) => ({ ...tensor, params: window.WLA ? window.WLA.realParams(tensor) : tensor.params,
+      searchText: `${tensor.name} ${tensor.shape.join(' ')} ${tensor.dtype} ${tensor.shard || ''}`.toLowerCase() }));
+    const columns = [['name', 'Tensor'], ['shape', 'Stored shape'], ['dtype', 'Dtype'], ['params', 'Parameters'], ['bytes', 'Storage']];
+    if (model.sharded) columns.push(['shard', 'Shard']);
+    const sortRows = () => rows.sort((a, b) => {
+      const left = Array.isArray(a[sortKey]) ? a[sortKey].join(' × ') : a[sortKey];
+      const right = Array.isArray(b[sortKey]) ? b[sortKey].join(' × ') : b[sortKey];
+      const order = typeof left === 'number' ? left - right : collator.compare(String(left || ''), String(right || ''));
+      return descending ? -order : order;
+    });
+    function draw() {
+      const query = search.value.trim().toLowerCase();
+      const filtered = rows.filter((tensor) => (!scope || tensor.name.startsWith(scope + '.')) &&
+        (!query || tensor.searchText.includes(query)));
+      const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+      page = Math.min(page, pages - 1);
+      const header = h('tr', null, columns.map(([key, label]) => h('th', {
+        scope: 'col', 'aria-sort': key === sortKey ? (descending ? 'descending' : 'ascending') : 'none',
+      }, h('button', { class: 'wa-sort', onclick: () => {
+        descending = sortKey === key ? !descending : key === 'params' || key === 'bytes';
+        sortKey = key; page = 0; sortRows(); draw();
+      } }, label))));
+      table.replaceChildren(h('thead', null, header));
+      const body = h('tbody');
+      for (const tensor of filtered.slice(page * pageSize, (page + 1) * pageSize)) {
+        const row = h('tr', { class: selectedTensor === tensor.name ? 'wa-tensor-selected' : '' });
+        row.append(h('td', { class: 'tname' }, h('button', { class: 'wa-tensor-name', title: tensor.name, onclick: () => {
+          selectedTensor = tensor.name;
+          if (options.onSelect) options.onSelect(tensor);
+          draw();
+        } }, tensor.name)), h('td', { class: 'mono' }, '[' + tensor.shape.join(', ') + ']'),
+        h('td', null, tensor.dtype), h('td', { class: 'mono' }, tensor.params.toLocaleString('en-US')),
+        h('td', { class: 'mono' }, fmtBytes(tensor.bytes)));
+        if (model.sharded) row.append(h('td', { class: 'shard' }, tensor.shard || '—'));
+        body.append(row);
       }
-      count.textContent = `${shown} of ${rows.length} tensors`;
+      table.append(body);
+      count.textContent = filtered.length ? `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, filtered.length)} of ${filtered.length.toLocaleString('en-US')} tensors` : '0 tensors';
+      pageLabel.textContent = `${page + 1} / ${pages}`;
+      previous.disabled = page === 0; next.disabled = page === pages - 1;
+      pagination.hidden = pages === 1;
     }
-    const count = h('div', { class: 'count' });
-    search.addEventListener('input', () => draw(search.value.trim().toLowerCase()));
-    draw('');
-    wrap.append(h('div', { class: 'search-row' }, search, count), table);
+    const previous = h('button', { class: 'gbtn', onclick: () => { page--; draw(); } }, 'Previous');
+    const next = h('button', { class: 'gbtn', onclick: () => { page++; draw(); } }, 'Next');
+    const pagination = h('div', { class: 'wa-table-pages' }, previous, pageLabel, next);
+    search.addEventListener('input', () => { page = 0; draw(); });
+    wrap.setScope = (path) => { scope = path || ''; page = 0; draw(); };
+    sortRows(); draw();
+    wrap.append(h('div', { class: 'search-row' }, search, count), h('div', { class: 'wa-table-scroll' }, table),
+      pagination);
     return wrap;
+  }
+
+  function architectureWorkspace(model) {
+    const root = buildTree(model.tensors);
+    const anatomy = window.WLA.analyze(model);
+    const workspace = h('div', { class: 'wa-workspace' });
+    const moduleTree = h('div', { class: 'wa-module-tree', role: 'tree', 'aria-label': 'Model modules' });
+    const moduleCount = h('span', { class: 'wa-count', role: 'status' });
+    const moduleSearch = h('input', { class: 'search', type: 'search', placeholder: 'Find a module or tensor…', 'aria-label': 'Find module or tensor' });
+    const inspector = h('aside', { class: 'wa-inspector', 'aria-label': 'Selection inspector' });
+    const scopeLabel = h('span', { class: 'wa-scope' });
+    const expanded = new Set(['']);
+    const records = [];
+    const recordByPath = new Map();
+    const renderedRows = new Map();
+    let selected = root, graph, visibleRecords = [], treeLimit = 200;
+    const scopeKey = 'wl.architecture.scope.' + model.fileName;
+    const savedPath = store.get(scopeKey);
+    const collator = new Intl.Collator('en', { numeric: true });
+    function indexNode(node, depth) {
+      const children = [...node.children.values()].sort((a, b) => collator.compare(a.key, b.key));
+      const record = { node, depth, children,
+        search: [node.path, ...node.tensors.map((tensor) => node.path ? node.path + '.' + tensor.leaf : tensor.leaf)].join(' ').toLowerCase() };
+      records.push(record); recordByPath.set(node.path, record);
+      children.forEach((child) => indexNode(child, depth + 1));
+    }
+    indexNode(root, 1);
+    function reveal(path) {
+      const parts = path.split('.');
+      while (parts.length) { parts.pop(); expanded.add(parts.join('.')); }
+    }
+    function selectTree(record, focus) {
+      graph.select(record.node.path);
+      if (focus) renderedRows.get(record.node.path)?.focus({ preventScroll: true });
+    }
+    function drawTree(focusPath) {
+      const query = moduleSearch.value.trim().toLowerCase();
+      const matches = [];
+      if (query) {
+        for (const record of records) if (record.search.includes(query)) matches.push(record);
+      } else {
+        const visit = (record) => {
+          matches.push(record);
+          if (expanded.has(record.node.path)) record.children.forEach((child) => visit(recordByPath.get(child.path)));
+        };
+        visit(records[0]);
+      }
+      visibleRecords = matches.slice(0, treeLimit);
+      moduleCount.textContent = query ? `${matches.length.toLocaleString('en-US')} matches` : `${records.length.toLocaleString('en-US')} modules`;
+      moduleTree.replaceChildren(); renderedRows.clear();
+      const focusable = visibleRecords.some((record) => record.node.path === selected.path) ? selected.path : visibleRecords[0]?.node.path;
+      for (const record of visibleRecords) {
+        const { node, children } = record;
+        const open = expanded.has(node.path);
+        const row = h('div', { class: 'wa-module-row' + (selected.path === node.path ? ' selected' : ''),
+          role: 'treeitem', 'aria-level': query ? 1 : record.depth, 'aria-selected': String(selected.path === node.path),
+          'aria-expanded': children.length ? String(open) : null, tabindex: focusable === node.path ? '0' : '-1',
+          title: node.path || 'Model', 'data-module': node.path, style: `--depth:${query ? 0 : record.depth - 1}`,
+          onclick: () => selectTree(record, true),
+          onkeydown: (event) => {
+            if (event.target !== row) return;
+            const index = visibleRecords.indexOf(record);
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              const next = visibleRecords[index + (event.key === 'ArrowDown' ? 1 : -1)];
+              if (next) selectTree(next, true);
+            } else if (event.key === 'ArrowRight' && children.length) {
+              event.preventDefault();
+              if (!open) { expanded.add(node.path); drawTree(node.path); }
+              else selectTree(recordByPath.get(children[0].path), true);
+            } else if (event.key === 'ArrowLeft') {
+              event.preventDefault();
+              if (open && children.length) { expanded.delete(node.path); drawTree(node.path); }
+              else if (node.path) selectTree(recordByPath.get(node.path.split('.').slice(0, -1).join('.')), true);
+            } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectTree(record, true); }
+            else if (event.key === 'Home' || event.key === 'End') {
+              event.preventDefault(); selectTree(visibleRecords[event.key === 'Home' ? 0 : visibleRecords.length - 1], true);
+            }
+          } },
+          children.length ? h('button', { class: 'wa-tree-caret', tabindex: '-1', 'aria-label': (open ? 'Collapse ' : 'Expand ') + (node.path || 'Model'), onclick: (event) => {
+            event.stopPropagation();
+            if (open) expanded.delete(node.path); else expanded.add(node.path);
+            drawTree(node.path);
+          } }, open ? '▾' : '▸') : h('span', { class: 'wa-tree-leaf', 'aria-hidden': 'true' }, '·'),
+          h('span', { class: 'wa-module-name' }, node.key || 'Model'), h('span', { class: 'wa-module-size' }, fmtNum(node.params)));
+        renderedRows.set(node.path, row); moduleTree.append(row);
+      }
+      if (!matches.length) moduleTree.append(h('div', { class: 'wa-empty' }, 'No matching modules'));
+      more.hidden = matches.length <= treeLimit;
+      if (focusPath !== undefined) renderedRows.get(focusPath)?.focus({ preventScroll: true });
+    }
+    const more = h('button', { class: 'gbtn wa-more', onclick: () => { treeLimit += 200; drawTree(); } }, 'Show more modules');
+    const paperStackIndexes = anatomy.stacks.map((_, index) => index).filter((index) =>
+      anatomy.stacks[index].blocks.every((block) => block.attn > 0 && block.mlp > 0));
+    const paper = h('div', { class: 'wa-paper', hidden: true });
+    const stackPicker = h('select', { class: 'wl-select', 'aria-label': 'Diagram stack' }, paperStackIndexes.map((index) => h('option', { value: index }, `${anatomy.stacks[index].role} · ${anatomy.stacks[index].n} blocks`)));
+    stackPicker.hidden = true;
+    function drawPaper() {
+      if (paper.hidden || !anatomy.stacks.length) return;
+      const stackIndex = Number(stackPicker.value), stack = anatomy.stacks[stackIndex];
+      const blockId = Number(selected.path.slice(stack.prefix.length + 1).split('.')[0]);
+      const blockIndex = Math.max(0, stack.blocks.findIndex((block) => block.i === blockId));
+      paper.replaceChildren(window.WLX.paperDiagram(anatomy, stackIndex, blockIndex, (key) => {
+        let path = stack.prefix + '.' + stack.blocks[blockIndex].i;
+        if (key === 'embed' || key === 'head') {
+          const pattern = key === 'head' ? /lm_head|(^|\.)output\.weight/ : /embed_tokens|\.wte\.|token_embd|word_embeddings|token_embedding|(^|\.)shared\.weight/;
+          const tensor = model.tensors.find((tensor) => pattern.test(tensor.name));
+          if (tensor) path = tensor.name.split('.').slice(0, -1).join('.');
+        }
+        graph.select(path);
+      }));
+    }
+    function showModule(node) {
+      const dtypes = new Map();
+      for (const tensor of allTensors(node)) dtypes.set(tensor.dtype, (dtypes.get(tensor.dtype) || 0) + tensor.bytes);
+      const definition = h('details', { class: 'wl-details wa-definition' }, h('summary', null, 'Shape-derived definition'));
+      definition.addEventListener('toggle', () => {
+        if (definition.open && definition.children.length === 1) definition.append(codeBlockEl(node.path || 'Model', codeFor(node)));
+      });
+      inspector.replaceChildren(h('h3', null, 'Selection'), h('div', { class: 'wa-selected-path' }, node.path || 'Model'),
+        h('dl', { class: 'wa-facts' },
+          h('div', null, h('dt', null, 'Parameters'), h('dd', null, node.params.toLocaleString('en-US'))),
+          h('div', null, h('dt', null, 'Storage'), h('dd', null, fmtBytes(node.bytes))),
+          h('div', null, h('dt', null, 'Tensors'), h('dd', null, node.count.toLocaleString('en-US'))),
+          h('div', null, h('dt', null, 'Child modules'), h('dd', null, String(node.children.size)))),
+        h('details', { class: 'wl-details' }, h('summary', null, 'Storage by dtype'), h('div', { class: 'wa-dtypes' }, [...dtypes].sort((a, b) => b[1] - a[1]).map(([dtype, bytes]) => h('div', null, h('span', { class: 'mono' }, dtype), h('span', null, fmtBytes(bytes)))))),
+        ...(node.children.size ? [h('button', { class: 'wl-btn', onclick: () => graph.focus(node.path || null) }, 'Open module')] : []),
+        definition);
+    }
+    function showTensor(tensor) {
+      const modulePath = tensor.name.split('.').slice(0, -1).join('.');
+      graph.select(modulePath);
+      inspector.hidden = false; workspace.classList.add('has-selection');
+      const fields = [['Stored shape', '[' + tensor.shape.join(', ') + ']'], ['Dtype', tensor.dtype],
+        ['Parameters', tensor.params.toLocaleString('en-US')], ['Storage', fmtBytes(tensor.bytes)]];
+      if (tensor.shard) fields.push(['File', tensor.shard]);
+      inspector.replaceChildren(h('h3', null, 'Tensor inspector'), h('div', { class: 'wa-selected-path' }, tensor.name),
+        h('dl', { class: 'wa-facts' }, fields.map(([label, value]) => h('div', null, h('dt', null, label), h('dd', null, value)))),
+        h('button', { class: 'wl-btn', onclick: () => showModule(selected) }, 'Module summary'));
+    }
+    const tensors = tensorsView(model, { onSelect: showTensor });
+    const tensorSummary = h('summary', { class: 'wa-panel-title' }, 'Tensors');
+    const applyScope = (node) => {
+      selected = node; reveal(node.path);
+      inspector.hidden = !node.path; workspace.classList.toggle('has-selection', !!node.path);
+      tensorSummary.textContent = 'Tensors · ' + node.count.toLocaleString('en-US');
+      store.set(scopeKey, node.path);
+      scopeLabel.textContent = node.path || 'Model';
+      tensors.setScope(node.path);
+      showModule(node); drawTree();
+      const stackIndex = anatomy.stacks.findIndex((stack) => node.path === stack.prefix || node.path.startsWith(stack.prefix + '.'));
+      if (paperStackIndexes.includes(stackIndex)) stackPicker.value = String(stackIndex);
+      drawPaper();
+    };
+    graph = graphView(model, root, root.params || 1, applyScope, { hierarchy: true, externalDetails: true });
+    graph.el.classList.add('wa-module-graph');
+    const diagramMode = h('select', { class: 'wl-select', 'aria-label': 'Architecture view', onchange: () => {
+      const isPaper = diagramMode.value === 'paper';
+      graph.el.hidden = isPaper; paper.hidden = !isPaper; stackPicker.hidden = !isPaper;
+      drawPaper();
+    } }, h('option', { value: 'modules' }, 'Module graph'), paperStackIndexes.length ? h('option', { value: 'paper' }, 'Paper diagram') : null);
+    stackPicker.addEventListener('change', () => graph.select(anatomy.stacks[Number(stackPicker.value)].prefix));
+    moduleSearch.addEventListener('input', () => { treeLimit = 200; drawTree(); workspace.classList.add('show-modules'); });
+    moduleSearch.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && visibleRecords.length) selectTree(visibleRecords[0], true);
+      if (event.key === 'Escape') { moduleSearch.value = ''; treeLimit = 200; drawTree(); }
+    });
+    const treeToggle = h('button', { class: 'wl-btn wa-tree-toggle', 'aria-expanded': 'false', onclick: () => {
+      const open = workspace.classList.toggle('show-modules'); treeToggle.setAttribute('aria-expanded', String(open));
+    } }, 'Modules');
+    workspace.addEventListener('keydown', (event) => {
+      if (event.key === '/' && !/INPUT|SELECT|TEXTAREA/.test(event.target.tagName)) {
+        event.preventDefault(); workspace.classList.add('show-modules'); treeToggle.setAttribute('aria-expanded', 'true'); moduleSearch.focus();
+      }
+    });
+    workspace.append(h('div', { class: 'wa-toolbar' }, treeToggle, moduleSearch, diagramMode, stackPicker),
+      h('div', { class: 'wa-layout' },
+        h('aside', { class: 'wa-tree-panel', 'aria-label': 'Module browser' }, h('div', { class: 'wa-panel-title' }, 'Modules', moduleCount), moduleTree, more),
+        h('div', { class: 'wa-center' }, h('div', { class: 'wa-panel-title' }, scopeLabel), graph.el, paper),
+        inspector,
+        h('details', { class: 'wa-tensor-panel', 'aria-label': 'Scoped tensor inventory' }, tensorSummary, tensors)));
+    if (savedPath && recordByPath.has(savedPath)) graph.select(savedPath);
+    return workspace;
   }
 
   function jsonView(obj, empty, title) {
@@ -1144,31 +1080,85 @@
     return codeBlockEl(title || 'json', JSON.stringify(obj, null, 2), 'json');
   }
 
-  function render(model) {
-    app.innerHTML = '';
-    app.append(summaryBar(model));
-    const body = h('div', { class: 'body' });
-    const views = {
-      Architecture: () => archView(model),
-      Tensors: () => tensorsView(model),
-      Config: () => jsonView(model.config, 'No config.json next to this file.', 'config.json'),
-    };
-    // Auto-discovered sidecar configs (training args, generation, adapter, etc.)
-    for (const [label, entry] of Object.entries(model.extras || {})) {
-      views[label] = () => jsonView(entry.data, '', entry.file);
-    }
-    views.Metadata = () => jsonView(model.meta, 'No __metadata__ in the header.', '__metadata__');
-    const bar = tabs(Object.keys(views), (name) => { body.innerHTML = ''; body.append(views[name]()); });
-    app.append(bar, body);
-    body.append(views.Architecture());
+  // VS Code webview ↔ host channel; null on the web, where navigation does the job
+  const vsc = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
+  let galleryShown = false;
+  const store = {
+    get: (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch (_) { /* private mode */ } },
+  };
+  function openModel(id) {
+    if (vsc) vsc.postMessage({ type: 'open', id });
+    else location.search = '?model=' + encodeURIComponent(id);
+  }
+  function showGallery() {
+    viewDisposers.splice(0).forEach((dispose) => dispose());
+    galleryShown = true;
+    window.scrollTo(0, 0);
+    window.WLX.gallery(app, { onOpen: openModel });
+  }
+  function goBack() { if (vsc) showGallery(); else location.href = location.pathname; }
+  function backButton() {
+    if (!galleryShown && vsc) return null;
+    return h('button', { class: 'back', onclick: goBack }, '← All models');
   }
 
+  function modelDataMenu(model) {
+    const entries = [];
+    if (model.config) entries.push({ label: 'Config', file: 'config.json', data: model.config });
+    for (const [label, entry] of Object.entries(model.extras || {})) entries.push({ label, file: entry.file || label, data: entry.data });
+    if (model.meta) entries.push({ label: 'Metadata', file: '__metadata__', data: model.meta });
+    if (!entries.length) return null;
+    const menu = h('details', { class: 'wl-model-data' });
+    const panel = h('div', { class: 'wl-model-data-panel' });
+    menu.append(h('summary', null, 'Model data'), panel);
+    menu.addEventListener('keydown', (event) => { if (event.key === 'Escape') { menu.open = false; menu.querySelector('summary').focus(); } });
+    menu.addEventListener('toggle', () => {
+      if (!menu.open || panel.children.length) return;
+      const content = h('div', { class: 'wl-model-data-content' });
+      const selector = h('select', { class: 'wl-select', 'aria-label': 'Model data file' }, entries.map((entry, index) => h('option', { value: index }, entry.label)));
+      const draw = () => {
+        const entry = entries[Number(selector.value)];
+        content.replaceChildren(jsonView(entry.data, '', entry.file));
+      };
+      selector.addEventListener('change', draw);
+      panel.append(h('div', { class: 'wl-model-data-toolbar' }, selector,
+        h('button', { class: 'gbtn', 'aria-label': 'Close model data', onclick: () => { menu.open = false; menu.querySelector('summary').focus(); } }, '×')), content);
+      draw();
+    });
+    return menu;
+  }
+
+  function render(model) {
+    viewDisposers.splice(0).forEach((dispose) => dispose());
+    app.replaceChildren();
+    window.scrollTo(0, 0);
+    let view;
+    try { view = window.WLX.explain(model, window.WLA.analyze(model)); }
+    catch (error) { console.error(error); view = h('div', { class: 'wl wlx' }, tensorsView(model)); }
+    app.append(h('div', { class: 'wl-top' }, backButton(),
+      h('span', { class: 'brand' }, 'Weightless'), h('span', { class: 'crumb' }, model.fileName),
+      h('span', { class: 'spacer' }), modelDataMenu(model)), view);
+  }
+
+  window.WLArchitecture = architectureWorkspace;
+  document.body.classList.add('wl-body');
   window.addEventListener('message', (e) => {
     const msg = e.data;
+    if (!msg || !msg.type) return;
     if (msg.type === 'model') { MODEL = msg; render(msg); }
+    else if (msg.type === 'gallery') showGallery();
+    else if (msg.type === 'loading') {
+      viewDisposers.splice(0).forEach((dispose) => dispose());
+      window.WLX.loading(app, msg.id);
+    }
     else if (msg.type === 'error') {
       app.innerHTML = '';
-      app.append(h('div', { class: 'error' }, h('div', { class: 'error-t' }, 'Could not read this file'), h('div', null, msg.message)));
+      const back = backButton();
+      app.append(h('div', { class: 'wl wl-loading' },
+        h('div', { class: 'wl-loading-t' }, 'Could not open this model'),
+        h('div', { class: 'wl-loading-s' }, msg.message),
+        back ? h('button', { class: 'wl-btn', onclick: goBack }, 'Back to all models') : null));
     }
   });
 })();

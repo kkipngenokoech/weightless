@@ -1,0 +1,7 @@
+scripts/**
+web/**
+test/**
+docs/**
+.github/**
+.vscode/**
+*.vsix

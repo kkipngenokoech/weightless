@@ -2,39 +2,25 @@
  * extension's webview code (main.js), fed via the same MessageEvent contract. */
 (function () {
   'use strict';
-  const $ = (id) => document.getElementById(id);
   const P = window.WLP;
 
+  // The viewer (main.js) listens for the same messages the VS Code host posts.
+  const post = (data) => window.dispatchEvent(new MessageEvent('message', { data }));
   function showViewer(model) {
-    $('hero').classList.add('hidden');
-    $('topbar').classList.remove('hidden');
-    window.dispatchEvent(new MessageEvent('message', { data: model }));
+    post(model);
     document.title = model.fileName + ' — Weightless';
   }
-  function heroError(msg) {
-    const e = $('hero-err');
-    e.textContent = msg;
-    e.classList.remove('hidden');
-    busy(false);
-  }
-  function busy(b) {
-    $('go').disabled = b;
-    $('go').textContent = b ? 'Reading header…' : 'Inspect';
-  }
+  function fail(e) { post({ type: 'error', message: String((e && e.message) || e) }); }
 
   // ---------- Hugging Face Hub ----------
-  async function openHub(input, updateUrl) {
-    busy(true);
-    $('hero-err').classList.add('hidden');
+  async function openHub(input) {
+    let id;
+    try { id = P.normalizeId(input); } catch (e) { fail(e); return; }
+    post({ type: 'loading', id });
     try {
-      const id = P.normalizeId(input);
       const model = await P.loadFromHub(id);
-      if (updateUrl) history.replaceState(null, '', '?model=' + encodeURIComponent(id));
       showViewer({ type: 'model', fileName: id, ...model });
-    } catch (e) {
-      heroError(String((e && e.message) || e));
-    }
-    busy(false);
+    } catch (e) { fail(e); }
   }
 
   // ---------- local files (header-only via File.slice — nothing is uploaded) ----------
@@ -77,9 +63,8 @@
   async function openFiles(fileList) {
     const files = [...fileList];
     const main = files.find((f) => /\.safetensors$/i.test(f.name)) || files.find((f) => /\.gguf$/i.test(f.name));
-    if (!main) { heroError('Drop a .safetensors or .gguf file (a config.json can ride along).'); return; }
-    busy(true);
-    $('hero-err').classList.add('hidden');
+    if (!main) { fail('Drop a .safetensors or .gguf file. A config.json can come along with it.'); return; }
+    post({ type: 'loading', id: main.name });
     try {
       const model = /\.gguf$/i.test(main.name) ? await loadGGUFFile(main) : await loadSTFile(main);
       // sidecar JSONs dropped in the same gesture
@@ -96,34 +81,39 @@
           catch (_) { /* not JSON */ }
         }
       }
-      history.replaceState(null, '', location.pathname);
       showViewer({ type: 'model', fileName: main.name, ...model });
-    } catch (e) {
-      heroError(String((e && e.message) || e));
-    }
-    busy(false);
+    } catch (e) { fail(e); }
   }
 
   // ---------- wiring ----------
-  $('go').addEventListener('click', () => { const v = $('hubid').value.trim(); if (v) openHub(v, true); });
-  $('hubid').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = $('hubid').value.trim(); if (v) openHub(v, true); } });
-  $('again').addEventListener('click', () => { location.href = location.pathname; });
-
-  const drop = $('drop');
-  ['dragover', 'dragenter'].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
-  document.addEventListener('dragleave', (e) => { e.preventDefault(); drop.classList.remove('over'); });
-  document.addEventListener('drop', (e) => {
-    e.preventDefault();
-    drop.classList.remove('over');
-    if (e.dataTransfer && e.dataTransfer.files.length) openFiles(e.dataTransfer.files);
-  });
-  drop.addEventListener('click', () => {
+  function pickFiles() {
     const i = document.createElement('input');
     i.type = 'file'; i.multiple = true;
     i.onchange = () => { if (i.files.length) openFiles(i.files); };
     i.click();
+  }
+  ['dragover', 'dragenter'].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); document.body.classList.add('dragging'); }));
+  document.addEventListener('dragleave', (e) => { e.preventDefault(); document.body.classList.remove('dragging'); });
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    document.body.classList.remove('dragging');
+    if (e.dataTransfer && e.dataTransfer.files.length) openFiles(e.dataTransfer.files);
   });
 
   const q = new URLSearchParams(location.search).get('model');
-  if (q) { $('hubid').value = q; openHub(q, false); }
+  if (q) { openHub(q); return; }
+  post({ type: 'gallery' });
+  const slot = document.querySelector('.wlg-slot');
+  if (slot) {
+    const drop = document.createElement('div');
+    drop.className = 'wl-drop';
+    drop.tabIndex = 0;
+    drop.innerHTML = 'Have a file? Drop a <b>.safetensors</b> or <b>.gguf</b> here, or click to choose one. Add its <b>config.json</b> for more detail. Only the index is read, and nothing leaves your computer.';
+    drop.addEventListener('click', pickFiles);
+    drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickFiles(); } });
+    const links = document.createElement('div');
+    links.className = 'wl-links';
+    links.innerHTML = 'Also in your editor: <a href="https://marketplace.visualstudio.com/items?itemName=kipngenokoech.weightless" target="_blank" rel="noopener">VS Code</a> · <a href="https://open-vsx.org/extension/kipngenokoech/weightless" target="_blank" rel="noopener">Open VSX</a> · <a href="https://github.com/kkipngenokoech/weightless" target="_blank" rel="noopener">GitHub</a>';
+    slot.append(drop, links);
+  }
 })();

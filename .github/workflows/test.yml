@@ -14,5 +14,10 @@ jobs:
         with:
           node-version: 20
       - run: npm test
+      - name: Viewer interactions
+        run: |
+          npm install --prefix "$RUNNER_TEMP/weightless-test" --no-save --ignore-scripts jsdom@26.1.0
+          NODE_PATH="$RUNNER_TEMP/weightless-test/node_modules" node test/explain.js
+          NODE_PATH="$RUNNER_TEMP/weightless-test/node_modules" node test/workspace.js
       - name: package (sanity)
         run: npx --yes @vscode/vsce package --out /tmp/weightless.vsix
