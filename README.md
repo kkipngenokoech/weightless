@@ -46,6 +46,10 @@ NODE_PATH=/tmp/weightless-test/node_modules node test/workspace.js
 
 Package the extension with `npx @vscode/vsce package`.
 
+## Contribute
+
+Bug reports and pull requests are welcome. See [the contribution guide](CONTRIBUTING.md) for setup, testing and submission instructions.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

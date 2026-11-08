@@ -1,0 +1,47 @@
+name: Remove version 0.2.0
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --prefix "$RUNNER_TEMP/registry-client" --no-save --ignore-scripts azure-devops-node-api@15.1.1
+      - name: Remove only Marketplace version 0.2.0
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          NODE_PATH="$RUNNER_TEMP/registry-client/node_modules" node <<'JS'
+          const {getBasicHandler} = require('azure-devops-node-api/WebApi');
+          const {GalleryApi} = require('azure-devops-node-api/GalleryApi');
+          const api = new GalleryApi('https://marketplace.visualstudio.com', [getBasicHandler('OAuth', process.env.VSCE_PAT)]);
+          (async () => {
+            await api.getExtension({}, 'kipngenokoech', 'weightless', '0.1.9');
+            await api.deleteExtension('kipngenokoech', 'weightless', '0.2.0');
+            await api.getExtension({}, 'kipngenokoech', 'weightless', '0.1.9');
+            console.log('Deleted only Marketplace version 0.2.0; 0.1.9 remains.');
+          })().catch(error => { console.error(error.message); process.exitCode = 1; });
+          JS
+      - name: Remove only Open VSX version 0.2.0
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+        run: |
+          python <<'PY'
+          import json, os, urllib.request
+          base = 'https://open-vsx.org/api/kipngenokoech/weightless'
+          with urllib.request.urlopen(base + '/0.1.9') as response:
+              assert json.load(response)['version'] == '0.1.9'
+          request = urllib.request.Request(base + '/delete', method='POST',
+              data=json.dumps([{'version': '0.2.0'}]).encode(),
+              headers={'Authorization': 'Bearer ' + os.environ['OVSX_TOKEN'], 'Content-Type': 'application/json'})
+          with urllib.request.urlopen(request) as response:
+              result = json.load(response)
+              assert not result.get('error'), result
+          with urllib.request.urlopen(base + '/0.1.9') as response:
+              assert json.load(response)['version'] == '0.1.9'
+          print('Deleted only Open VSX version 0.2.0; 0.1.9 remains.')
+          PY
