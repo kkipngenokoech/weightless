@@ -2,7 +2,7 @@
   "name": "weightless",
   "displayName": "Weightless",
   "description": "Inspect open-weight models in VS Code. Explore module graphs, transformer schematics, tensor shapes, parameter counts and model configuration. Header-only reads support local safetensors and GGUF checkpoints and the Hugging Face Hub.",
-  "version": "0.2.0",
+  "version": "0.1.9",
   "publisher": "kipngenokoech",
   "license": "MIT",
   "icon": "icon.png",
